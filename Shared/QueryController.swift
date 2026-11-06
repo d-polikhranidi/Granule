@@ -42,6 +42,8 @@ final class QueryController {
     private let sessionID = UUID().uuidString
     private var lastRows = 0
     private(set) var searchText = ""
+    /// The session's database after a `USE` run in it (`nil`: the connection's).
+    private(set) var currentDatabase: String?
     /// The server's view shown (its statement run as is), refreshed while it's live.
     private(set) var view: ServerView?
     private var refreshing: Task<Void, Never>?
@@ -176,6 +178,7 @@ final class QueryController {
                     if !shown, !isRead {
                         onText(String(localized: "Done."))
                     }
+                    if let database = Self.usedDatabase(sql) { currentDatabase = database }
                     state = .finished(stats)
                     lastStats = stats
                     isRefreshing = false
@@ -209,6 +212,16 @@ final class QueryController {
             table.sortsRows = true
         }
         onChange()
+    }
+
+    /// The database a `USE` statement switches the session to.
+    static func usedDatabase(_ sql: String) -> String? {
+        let words = CHSQL.tokens(sql).filter { $0.kind != .whitespace && $0.kind != .comment }
+        let text = sql as NSString
+        guard words.count >= 2, text.substring(with: words[0].range).uppercased() == "USE" else { return nil }
+        let name = text.substring(with: words[1].range)
+        guard name.count >= 2, let first = name.first, first == "`" || first == "\"" else { return name }
+        return String(name.dropFirst().dropLast())
     }
 
     /// The server's progress of a running query, twice a second (from a

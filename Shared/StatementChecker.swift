@@ -25,6 +25,8 @@ final class StatementChecker {
     let isAutomatic: Bool
     /// Called when the problems changed.
     var onChange: () -> Void = {}
+    /// The database names without one are in (the session's, after a USE).
+    var database: () -> String? = { nil }
     private(set) var problems: [EditorProblem] = []
     /// Whether the server is checking now.
     private(set) var isChecking = false
@@ -89,7 +91,7 @@ final class StatementChecker {
                 let checksNames = explicit || !CHSQL.mayHaveScalarSubquery(statement)
                 let found: [CHSQL.Problem]
                 do {
-                    found = try await client.check(statement, checksNames: checksNames, limit: explicit ? 5 : 1)
+                    found = try await client.check(statement, checksNames: checksNames, limit: explicit ? 5 : 1, database: self.database())
                 } catch {
                     break
                 }

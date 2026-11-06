@@ -164,6 +164,10 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                     self?.completions = completions
                     #if DEBUG
                     // `-ViewerComplete <text>`: the text typed, the editor focused (its completions in the bar).
+                    if let self, let sql = UserDefaults.standard.string(forKey: "ViewerPlan") {
+                        self.editor.text = sql
+                        self.showPlan(of: sql)
+                    }
                     if let self, let text = UserDefaults.standard.string(forKey: "ViewerText") {
                         self.editor.text = text
                         self.textViewDidChange(self.editor)
@@ -218,6 +222,20 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         guard let sql = currentStatement() else { return }
         editor.resignFirstResponder()
         run(sql)
+    }
+
+    /// Explain Plan: the plan's steps, each read with the granules its indexes leave, in a sheet.
+    private func showPlan(of sql: String) {
+        statusLabel.text = String(localized: "Explaining…")
+        Task {
+            do {
+                let plan = try await client.plan(of: sql)
+                statusLabel.text = PlanItem.summary(of: plan)
+                present(UINavigationController(rootViewController: PlanViewController(plan: plan)), animated: true)
+            } catch {
+                show(error)
+            }
+        }
     }
 
     /// The selection, or the statement at the cursor (without its semicolon).
@@ -439,13 +457,17 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         let export = UIMenu(title: String(localized: "Export"), image: UIImage(systemName: "square.and.arrow.up"), children: formats.map { title, format, ext in
             UIAction(title: title, attributes: canExport ? [] : .disabled) { [weak self] _ in self?.export(format: format, extension: ext) }
         })
+        let plan = UIAction(title: String(localized: "Explain Plan")) { [weak self] _ in
+            guard let self, let sql = currentStatement() else { return }
+            showPlan(of: sql)
+        }
         let explains: [(String, String)] = [
-            (String(localized: "Explain Plan"), "EXPLAIN PLAN indexes = 1 %@ FORMAT TSVRaw"),
+            (String(localized: "Explain Plan as Text"), "EXPLAIN PLAN indexes = 1 %@ FORMAT TSVRaw"),
             (String(localized: "Explain Pipeline"), "EXPLAIN PIPELINE %@ FORMAT TSVRaw"),
             (String(localized: "Explain Estimate"), "EXPLAIN ESTIMATE %@"),
             (String(localized: "Explain Syntax"), "EXPLAIN SYNTAX %@ FORMAT TSVRaw"),
         ]
-        let explain = UIMenu(title: String(localized: "Explain"), image: UIImage(systemName: "list.bullet.indent"), children: explains.map { title, form in
+        let explain = UIMenu(title: String(localized: "Explain"), image: UIImage(systemName: "list.bullet.indent"), children: [plan] + explains.map { title, form in
             UIAction(title: title) { [weak self] _ in
                 guard let self, let sql = currentStatement() else { return }
                 run(form.replacingOccurrences(of: "%@", with: sql))

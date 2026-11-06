@@ -29,6 +29,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     private let sidebar = SchemaSidebar()
     private let editor = SQLTextView()
     private let textOutput = NSTextView()
+    private let planOutline = PlanOutline()
     private var textScroll: NSScrollView!
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
@@ -144,7 +145,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         statusLabel.lineBreakMode = .byTruncatingTail
 
         let results = NSView()
-        for view in [table, textScroll!] as [NSView] {
+        planOutline.isHidden = true
+        for view in [table, textScroll!, planOutline] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             results.addSubview(view)
             NSLayoutConstraint.activate([
@@ -244,6 +246,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                     editor.setSelectedRange(NSRange(location: cursor, length: 0))
                     checker.update(text: text, cursor: cursor)
                 }
+                // `-ViewerPlan <SQL>`: its plan shown (Explain Plan).
+                if let sql = UserDefaults.standard.string(forKey: "ViewerPlan") {
+                    editor.string = sql
+                    showPlan(of: sql)
+                }
                 // `-ViewerView <name>`: a server view shown (processes, merges, …).
                 if let name = UserDefaults.standard.string(forKey: "ViewerView"), let view = ServerView(rawValue: name) {
                     sidebar.onShowView(view)
@@ -321,13 +328,35 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     @objc func explainStatement(_ sender: Any?) {
         guard let sql = currentStatement() else { return }
         let kind = (sender as? NSMenuItem)?.tag ?? 0
+        if kind == 0 { return showPlan(of: sql) }
         let explain = switch kind {
+        case 4: "EXPLAIN PLAN indexes = 1 \(sql) FORMAT TSVRaw"
         case 1: "EXPLAIN PIPELINE \(sql) FORMAT TSVRaw"
         case 2: "EXPLAIN ESTIMATE \(sql)"
         case 3: "EXPLAIN SYNTAX \(sql) FORMAT TSVRaw"
         default: "EXPLAIN PLAN indexes = 1 \(sql) FORMAT TSVRaw"
         }
         run(explain)
+    }
+
+    /// Explain Plan: the plan's steps as an outline in the result's place,
+    /// each read with the granules its indexes leave.
+    private func showPlan(of sql: String) {
+        statusLabel.stringValue = String(localized: "Explaining…")
+        messageLabel.isHidden = true
+        Task {
+            do {
+                let plan = try await client.plan(of: sql)
+                planOutline.show(plan)
+                table.isHidden = true
+                textScroll.isHidden = true
+                planOutline.isHidden = false
+                statusLabel.stringValue = String(localized: "The plan, not run: \(PlanItem.summary(of: plan))")
+            } catch {
+                show(error)
+                statusLabel.stringValue = ""
+            }
+        }
     }
 
     /// The selection, or the statement at the cursor (without its semicolon).
@@ -399,6 +428,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
 
     /// A statement's text output in place of the table (`nil`: the table again).
     private func showText(_ text: String?) {
+        planOutline.isHidden = true
         textScroll.isHidden = text == nil
         table.isHidden = text != nil
         textOutput.string = text ?? ""

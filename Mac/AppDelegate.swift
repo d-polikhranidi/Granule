@@ -128,6 +128,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 return explain
             }(),
             {
+                let explain = item(String(localized: "Explain Plan as Text"), #selector(QueryWindowController.explainStatement(_:)))
+                explain.tag = 4
+                return explain
+            }(),
+            {
                 let explain = item(String(localized: "Explain Pipeline"), #selector(QueryWindowController.explainStatement(_:)))
                 explain.tag = 1
                 return explain

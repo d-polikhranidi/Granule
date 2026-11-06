@@ -5,7 +5,8 @@ import ClickHouseSSH
 /// The servers the user added: a list, and the selected one's form (a URL
 /// pasted fills it in). Connect opens a window of queries on it.
 final class ConnectionsWindowController: NSWindowController, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
-    private let onConnect: (CHEndpoint) -> Void
+    /// A connection that worked, and its client (connected).
+    private let onConnect: (CHEndpoint, CHClient) -> Void
     private let list = NSTableView()
     private var endpoints: [CHEndpoint] { Connections.shared.endpoints }
 
@@ -43,12 +44,18 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
     /// A private key chosen and read, kept in the Keychain when the form is saved.
     private var pendingKey: (name: String, text: String)?
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
+    /// The whole of a long message (the status shows its first paragraph).
+    private let statusDetails = NSButton(title: String(localized: "Details…"), target: nil, action: nil)
+    private var statusText = ""
+    /// The connection being tried (Test, or Connect before its window opens).
+    private var attempt: Task<Void, Never>?
+    private var isRestoringSelection = false
     private let connectButton = NSButton(title: String(localized: "Connect"), target: nil, action: nil)
     private let testButton = NSButton(title: String(localized: "Test"), target: nil, action: nil)
     private var form: NSView!
     private var authority: Data?
 
-    init(onConnect: @escaping (CHEndpoint) -> Void) {
+    init(onConnect: @escaping (CHEndpoint, CHClient) -> Void) {
         self.onConnect = onConnect
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
@@ -57,7 +64,7 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         window.setFrameAutosaveName("Connections")
         super.init(window: window)
         build()
-        Connections.shared.onChange.append { [weak self] in self?.list.reloadData() }
+        Connections.shared.onChange.append { [weak self] in self?.reloadList() }
         if endpoints.isEmpty {
             Connections.shared.save(CHEndpoint(name: String(localized: "Local server")), password: "")
         }
@@ -65,6 +72,11 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         window.center()
         #if DEBUG
+        // `-ViewerForm testfail`: Test with a wrong password, then the right one, in a
+        // connection made for it (removed after), clicked and typed as a user would.
+        if UserDefaults.standard.string(forKey: "ViewerForm") == "testfail" {
+            Task { await checkFormForTesting() }
+        }
         // `-ViewerForm ssh`: the form's SSH rows shown (not saved), and the window's number.
         if UserDefaults.standard.string(forKey: "ViewerForm") == "ssh" {
             sshBox.state = .on
@@ -148,6 +160,16 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         sshForgetButton.target = self
         sshForgetButton.action = #selector(forgetHostKey(_:))
         statusLabel.textColor = .secondaryLabelColor
+        statusLabel.isSelectable = false
+        statusLabel.maximumNumberOfLines = 2
+        statusLabel.lineBreakMode = .byWordWrapping
+        statusLabel.cell?.truncatesLastVisibleLine = true
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        statusDetails.bezelStyle = .inline
+        statusDetails.controlSize = .small
+        statusDetails.isHidden = true
+        statusDetails.target = self
+        statusDetails.action = #selector(showStatusDetails(_:))
         connectButton.keyEquivalent = "\r"
         connectButton.target = self
         connectButton.action = #selector(connect(_:))
@@ -200,8 +222,11 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         // Below the fields' compression resistance (750): hugging must not squeeze them.
         grid.setContentHuggingPriority(NSLayoutConstraint.Priority(700), for: .vertical)
         for index in 0..<grid.numberOfRows { grid.row(at: index).yPlacement = .center }
-        let actions = NSStackView(views: [statusLabel, testButton, connectButton])
+        // The message takes what the buttons leave; they stay on the right.
+        let actions = NSStackView(views: [statusLabel, statusDetails, testButton, connectButton])
+        actions.distribution = .fill
         statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        for button in [statusDetails, testButton, connectButton] { button.setContentHuggingPriority(.required, for: .horizontal) }
         let formStack = NSStackView(views: [grid, actions])
         formStack.orientation = .vertical
         formStack.alignment = .leading
@@ -253,7 +278,19 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { 38 }
 
     func tableViewSelectionDidChange(_ notification: Notification) {
+        guard !isRestoringSelection else { return }
         fill(from: selected)
+    }
+
+    /// The list read again, its selection kept: `reloadData()` drops it (and says
+    /// nothing), which left the form editing no connection.
+    private func reloadList() {
+        let id = selected?.id
+        list.reloadData()
+        guard let id, let row = endpoints.firstIndex(where: { $0.id == id }) else { return }
+        isRestoringSelection = true
+        list.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        isRestoringSelection = false
     }
 
     private var selected: CHEndpoint? {
@@ -316,8 +353,61 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         sshAuthPopUp.selectItem(at: endpoint.ssh?.keyName == nil ? 0 : 1)
         sshPasswordField.stringValue = endpoint.ssh?.keyName == nil ? Connections.shared.sshSecret(for: endpoint) : ""
         showSSH(endpoint)
-        statusLabel.stringValue = ""
+        showStatus("")
     }
+
+    #if DEBUG
+    private func checkFormForTesting() async {
+        guard let window else { return }
+        func click(_ view: NSView) {
+            let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+            for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                  windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                    NSApp.postEvent(event, atStart: false)
+                }
+            }
+        }
+        func type(_ text: String, into field: NSTextField) {
+            click(field)
+            window.makeFirstResponder(field)
+            field.currentEditor()?.selectAll(nil)
+            (field.currentEditor() as? NSTextView)?.insertText(text, replacementRange: NSRange(location: NSNotFound, length: 0))
+        }
+        func check(_ name: String, _ passed: Bool) {
+            FileHandle.standardError.write(Data("VIEWER-CHECK \(passed ? "pass" : "FAIL") \(name): «\(statusLabel.stringValue.prefix(80))» row \(list.selectedRow)\n".utf8))
+        }
+        func queryWindows() -> Int { NSApp.windows.filter { $0.windowController is QueryWindowController && $0.isVisible }.count }
+        try? await Task.sleep(for: .seconds(1))
+        FileHandle.standardError.write(Data("VIEWER-WINDOW \(window.windowNumber)\n".utf8))
+        addConnection(nil)
+        type("http://default:wrong@localhost:18123", into: urlField)
+        controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: urlField))
+        click(testButton)
+        try? await Task.sleep(for: .seconds(2))
+        check("a wrong password is said in short, the connection still selected",
+              statusLabel.stringValue.hasPrefix("default: Authentication failed") && !statusLabel.stringValue.contains("\n") && !statusDetails.isHidden && selected != nil)
+        type("viewer", into: passwordField)
+        click(testButton)
+        try? await Task.sleep(for: .seconds(2))
+        check("then the right one connects", statusLabel.stringValue.hasPrefix("Connected") && statusDetails.isHidden)
+        type("wrong", into: passwordField)
+        click(connectButton)
+        try? await Task.sleep(for: .seconds(2))
+        check("Connect with a wrong password opens no window", queryWindows() == 0 && statusLabel.textColor == .systemRed)
+        type("viewer", into: passwordField)
+        type("Checked", into: nameField)
+        click(connectButton)
+        try? await Task.sleep(for: .seconds(3))
+        check("Connect with the right one opens the window", queryWindows() == 1 && connectButton.title == String(localized: "Connect"))
+        check("the name reached the list", endpoints.contains { $0.name == "Checked" } && selected?.name == "Checked")
+        NSApp.windows.filter { $0.windowController is QueryWindowController }.forEach { $0.close() }
+        try? await Task.sleep(for: .seconds(1))
+        // Its own list, emptied: the entries and their Keychain items made here.
+        for endpoint in endpoints { Connections.shared.remove(endpoint) }
+        NSApp.terminate(nil)
+    }
+    #endif
 
     /// The SSH rows as the form says: hidden when off, the password's or the key's.
     private func showSSH(_ endpoint: CHEndpoint?) {
@@ -373,10 +463,9 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
                 let text = try String(contentsOf: url, encoding: .utf8)
                 _ = try CHSSHKey.parse(text)
                 pendingKey = (url.lastPathComponent, text)
-                statusLabel.stringValue = ""
+                showStatus("")
             } catch {
-                statusLabel.stringValue = (error as? CHSSHKey.Failure)?.description ?? CHSSHKey.Failure.unreadable.description
-                statusLabel.textColor = .systemRed
+                showStatus((error as? CHSSHKey.Failure)?.description ?? CHSSHKey.Failure.unreadable.description, isError: true)
             }
             showSSH(edited)
         }
@@ -418,9 +507,8 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
                     Connections.shared.save(endpoint, password: self.passwordField.stringValue)
                     self.showCertificate(name)
                 } catch {
-                    self.statusLabel.stringValue = (error as? CHClientIdentity.Failure) == .wrongPassword
-                        ? String(localized: "The file's password is wrong.") : String(localized: "The file isn't a PKCS#12 certificate with its key.")
-                    self.statusLabel.textColor = .systemRed
+                    self.showStatus((error as? CHClientIdentity.Failure) == .wrongPassword
+                        ? String(localized: "The file's password is wrong.") : String(localized: "The file isn't a PKCS#12 certificate with its key."), isError: true)
                 }
             }
         }
@@ -532,27 +620,76 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
     // MARK: Connecting
 
     @objc private func test(_ sender: Any?) {
+        guard attempt == nil, let endpoint = save() else { return }
+        tryConnecting(endpoint, opening: false)
+    }
+
+    /// Connects, then opens the server's window; an error stays in the form.
+    /// While it tries, the button stops it.
+    @objc private func connect(_ sender: Any?) {
+        if let attempt {
+            attempt.cancel()
+            return
+        }
         guard let endpoint = save() else { return }
-        statusLabel.stringValue = String(localized: "Connecting…")
-        statusLabel.textColor = .secondaryLabelColor
+        tryConnecting(endpoint, opening: true)
+    }
+
+    private func tryConnecting(_ endpoint: CHEndpoint, opening: Bool) {
+        showStatus(endpoint.isCloud ? String(localized: "Connecting (a sleeping service takes a while to wake)…") : String(localized: "Connecting…"))
+        testButton.isEnabled = false
+        connectButton.title = String(localized: "Stop")
         let client = CHClient(endpoint: endpoint, password: passwordField.stringValue, identity: Connections.shared.clientIdentity(for: endpoint))
-        Task {
+        attempt = Task {
             do {
-                if endpoint.ssh != nil { statusLabel.stringValue = String(localized: "Connecting to the SSH server…") }
+                if endpoint.ssh != nil { showStatus(String(localized: "Connecting to the SSH server…")) }
                 try await Connections.shared.route(client, for: endpoint)
                 showSSH(selected)
                 let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 15)
-                statusLabel.stringValue = String(localized: "Connected: ClickHouse \(info.version.text), \(info.user), \(info.timeZone)")
+                try Task.checkCancellation()
+                if opening {
+                    showStatus("")
+                    onConnect(endpoint, client)
+                } else {
+                    showStatus(String(localized: "Connected: ClickHouse \(info.version.text), \(info.user), \(info.timeZone)"))
+                }
+            } catch where Task.isCancelled {
+                showStatus(String(localized: "Stopped."))
             } catch {
-                statusLabel.stringValue = error.viewerDescription
-                statusLabel.textColor = .systemRed
+                showStatus(error.viewerDescription, isError: true)
                 showSSH(selected)
             }
+            attempt = nil
+            testButton.isEnabled = true
+            connectButton.title = String(localized: "Connect")
         }
     }
 
-    @objc private func connect(_ sender: Any?) {
-        guard let endpoint = save() else { return }
-        onConnect(endpoint)
+    /// A message under the form: its first paragraph, at most two lines (a
+    /// server's error can be a page long), the whole in Details and its tip.
+    private func showStatus(_ text: String, isError: Bool = false) {
+        statusText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let first = statusText.firstParagraph
+        // Wrapped at the width it has (what the buttons leave), so two lines show.
+        statusLabel.superview?.layoutSubtreeIfNeeded()
+        statusLabel.preferredMaxLayoutWidth = max(160, statusLabel.frame.width)
+        statusLabel.stringValue = first
+        statusLabel.textColor = isError ? .systemRed : .secondaryLabelColor
+        statusLabel.toolTip = statusText.isEmpty ? nil : statusText
+        statusDetails.isHidden = first == statusText && statusText.count < 160
+    }
+
+    @objc private func showStatusDetails(_ sender: Any?) {
+        guard let window, !statusText.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "The server's message")
+        alert.informativeText = statusText
+        alert.addButton(withTitle: String(localized: "OK"))
+        alert.addButton(withTitle: String(localized: "Copy"))
+        alert.beginSheetModal(for: window) { [statusText] response in
+            guard response == .alertSecondButtonReturn else { return }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(statusText, forType: .string)
+        }
     }
 }

@@ -7,12 +7,22 @@ import Security
 final class Connections {
     static let shared = Connections()
 
+    #if DEBUG
+    /// `-ViewerForm testfail` runs on a list and Keychain entries of its own (the
+    /// user's aren't touched, and nothing made by another build is read).
+    static let isChecking = UserDefaults.standard.string(forKey: "ViewerForm") == "testfail"
+    private static let key = isChecking ? "ConnectionsForChecks" : "Connections"
+    #else
     private static let key = "Connections"
+    #endif
     private(set) var endpoints: [CHEndpoint] = []
     /// Called when the list changed.
     var onChange: [() -> Void] = []
 
     private init() {
+        #if DEBUG
+        if Self.isChecking { UserDefaults.standard.removeObject(forKey: Self.key) }
+        #endif
         if let data = UserDefaults.standard.data(forKey: Self.key),
            let saved = try? JSONDecoder().decode([CHEndpoint].self, from: data) {
             endpoints = saved
@@ -73,7 +83,11 @@ final class Connections {
 
 /// Passwords in the Keychain, by connection.
 enum Keychain {
+    #if DEBUG
+    private static let service = "by.digitalglobe.Clickhouse-Viewer.connection" + (Connections.isChecking ? ".checks" : "")
+    #else
     private static let service = "by.digitalglobe.Clickhouse-Viewer.connection"
+    #endif
 
     private static func query(_ id: UUID) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: id.uuidString]

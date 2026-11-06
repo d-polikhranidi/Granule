@@ -43,7 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The window of connections (File > Connections…).
     @objc func showConnections(_ sender: Any?) {
         if connections == nil {
-            connections = ConnectionsWindowController { [weak self] endpoint in self?.open(endpoint) }
+            connections = ConnectionsWindowController { [weak self] endpoint, client in
+                self?.open(endpoint, password: Connections.shared.password(for: endpoint), tabOf: nil, client: client)
+            }
         }
         connections?.showWindow(sender)
         connections?.window?.makeKeyAndOrderFront(sender)
@@ -55,11 +57,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// A window of queries on a server, as a tab of another one's window if given.
-    private func open(_ endpoint: CHEndpoint, password: String, tabOf other: QueryWindowController?) {
+    /// `client`: one already connected (Connect checked it), else the window connects its own.
+    private func open(_ endpoint: CHEndpoint, password: String, tabOf other: QueryWindowController?, client: CHClient? = nil) {
         // The server's tabs are numbered: each keeps its editor's text.
         let used = Set(queryWindows.filter { $0.endpoint.id == endpoint.id }.map(\.tabNumber))
         let number = (0...).first { !used.contains($0) } ?? 0
-        let controller = QueryWindowController(endpoint: endpoint, password: password, tabNumber: number)
+        let controller = QueryWindowController(endpoint: endpoint, password: password, tabNumber: number, client: client)
         controller.onClose = { [weak self, weak controller] in self?.queryWindows.removeAll { $0 === controller } }
         controller.onNewTab = { [weak self] from in self?.open(from.endpoint, password: from.password, tabOf: from) }
         queryWindows.append(controller)

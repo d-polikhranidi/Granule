@@ -57,11 +57,12 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     /// The values last given to each parameter, offered again.
     private var parameterValues: [String: String] = [:]
 
-    init(endpoint: CHEndpoint, password: String, tabNumber: Int = 0) {
+    /// `client`: one already connected (the connections window's Connect), else its own.
+    init(endpoint: CHEndpoint, password: String, tabNumber: Int = 0, client: CHClient? = nil) {
         self.endpoint = endpoint
         self.password = password
         self.tabNumber = tabNumber
-        client = CHClient(endpoint: endpoint, password: password, identity: Connections.shared.clientIdentity(for: endpoint))
+        self.client = client ?? CHClient(endpoint: endpoint, password: password, identity: Connections.shared.clientIdentity(for: endpoint))
         history = QueryHistory(endpoint: endpoint)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -73,7 +74,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         window.tabbingMode = .preferred
         super.init(window: window)
         window.delegate = self
-        queries = QueryController(client: client, table: table)
+        queries = QueryController(client: self.client, table: table)
         build()
     }
 
@@ -275,12 +276,18 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             : String(localized: "Connecting…")
         Task {
             do {
-                if let bastion = endpoint.ssh {
-                    statusLabel.stringValue = String(localized: "Connecting to the SSH server \(bastion.host)…")
-                    try await Connections.shared.route(client, for: endpoint)
-                    statusLabel.stringValue = String(localized: "Connecting…")
+                // Connected already when the connections window checked it.
+                let info: CHServerInfo
+                if let known = client.serverInfo {
+                    info = known
+                } else {
+                    if let bastion = endpoint.ssh {
+                        statusLabel.stringValue = String(localized: "Connecting to the SSH server \(bastion.host)…")
+                        try await Connections.shared.route(client, for: endpoint)
+                        statusLabel.stringValue = String(localized: "Connecting…")
+                    }
+                    info = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)
                 }
-                let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)
                 let via = endpoint.ssh.map { String(localized: " via \($0.host)") } ?? ""
                 window?.subtitle = "\(endpoint.host)\(via) · ClickHouse \(info.version.text) · \(info.user)"
                 statusLabel.stringValue = String(localized: "Connected to ClickHouse \(info.version.text) (\(info.timeZone)).")

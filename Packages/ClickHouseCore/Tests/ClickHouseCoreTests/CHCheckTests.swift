@@ -115,3 +115,25 @@ struct CHWriteCheckTests {
         #expect(try await check("ALTER TABLE default.viewer_check_t ON CLUSTER default MODIFY COLUMN name LowCardinality(String)").isEmpty)
     }
 }
+
+@Suite(.enabled(if: TestServer.isAvailable, "CH_TEST_URL names no server"), .serialized)
+struct CHPlanTests {
+    @Test func plansShowTheIndexesFunnel() async throws {
+        let client = try await TestServer.connected()
+        _ = try await client.plainText("""
+            CREATE TABLE IF NOT EXISTS default.viewer_plan_t (k UInt32, d Date, v String) ENGINE = MergeTree
+            PARTITION BY toYYYYMM(d) ORDER BY k SETTINGS index_granularity = 1024
+            """)
+        if try await client.plainText("SELECT count() FROM default.viewer_plan_t FORMAT TSV").hasPrefix("0") {
+            _ = try await client.plainText("INSERT INTO default.viewer_plan_t SELECT number, toDate('2026-01-01') + number % 90, toString(number) FROM numbers(1000000)")
+        }
+        let plan = try await client.plan(of: "SELECT count() FROM default.viewer_plan_t WHERE k < 5000 AND d >= '2026-03-01'")
+        let read = try #require(plan.reads.first)
+        #expect(read.description.contains("viewer_plan_t"))
+        let primary = try #require(read.indexes.first { $0.type == "PrimaryKey" })
+        #expect(primary.keys == ["k"])
+        #expect((primary.selectedGranules ?? 0) < (primary.initialGranules ?? 0))
+        #expect(read.indexes.contains { $0.type == "Partition" })
+        #expect((primary.skipped ?? 0) > 0.9)
+    }
+}

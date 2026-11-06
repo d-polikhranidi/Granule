@@ -219,6 +219,17 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         showSecondary()
     }
 
+    /// A view of the server (Running Queries, Merges, …), refreshed while live.
+    func show(_ view: ServerView) {
+        messageLabel.isHidden = true
+        queries.show(view)
+        statusTimer?.invalidate()
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateStatus() }
+        }
+        showSecondary()
+    }
+
     func showCreate(of table: Schema.Table) {
         Task {
             do {
@@ -352,6 +363,10 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             items.append(UIAction(title: String(localized: "Copy \(rows.count.formatted()) Rows"), image: UIImage(systemName: "doc.on.clipboard")) { _ in
                 UIPasteboard.general.string = tableView.copyText(forRows: rows)
             })
+            if let title = queries.killTitle {
+                items.append(UIAction(title: rows.count == 1 ? title : "\(title) (\(rows.count.formatted()))", image: UIImage(systemName: "xmark.octagon"),
+                                      attributes: .destructive) { [weak self] _ in self?.queries.kill(rows: rows) })
+            }
         }
         return UIMenu(children: items)
     }

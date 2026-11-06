@@ -86,6 +86,7 @@ final class ConnectionsViewController: UICollectionViewController {
         schema.onShowRows = { [weak query] table in query?.showRows(of: table) }
         schema.onShowCreate = { [weak query] table in query?.showCreate(of: table) }
         schema.onInsert = { [weak query] text in query?.insert(text) }
+        schema.onShowView = { [weak query] view in query?.show(view) }
         query.onConnected = { [weak schema] in schema?.reload() }
         let split = UISplitViewController(style: .doubleColumn)
         // Side by side where there's room (landscape), the schema a tap away otherwise.

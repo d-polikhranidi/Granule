@@ -43,8 +43,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The window of connections (File > Connections…).
     @objc func showConnections(_ sender: Any?) {
         if connections == nil {
+            // A connection that worked takes the place of the connections window.
             connections = ConnectionsWindowController { [weak self] endpoint, client in
                 self?.open(endpoint, password: Connections.shared.password(for: endpoint), tabOf: nil, client: client)
+                self?.connections?.close()
             }
         }
         connections?.showWindow(sender)
@@ -63,7 +65,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let used = Set(queryWindows.filter { $0.endpoint.id == endpoint.id }.map(\.tabNumber))
         let number = (0...).first { !used.contains($0) } ?? 0
         let controller = QueryWindowController(endpoint: endpoint, password: password, tabNumber: number, client: client)
-        controller.onClose = { [weak self, weak controller] in self?.queryWindows.removeAll { $0 === controller } }
+        controller.onClose = { [weak self, weak controller] in
+            guard let self else { return }
+            queryWindows.removeAll { $0 === controller }
+            // The last server's window closed: the connections again, to pick the next.
+            if queryWindows.isEmpty { showConnections(nil) }
+        }
         controller.onNewTab = { [weak self] from in self?.open(from.endpoint, password: from.password, tabOf: from) }
         queryWindows.append(controller)
         if let other, let window = controller.window, let otherWindow = other.window {

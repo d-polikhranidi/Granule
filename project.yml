@@ -102,6 +102,8 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: true
         NSLocalNetworkUsageDescription: Connects to the ClickHouse servers you add on your local network.
+        # A window on one connection (Open in New Window, a connection dragged out, restored windows).
+        NSUserActivityTypes: [by.digitalglobe.Clickhouse-Viewer.connection]
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]

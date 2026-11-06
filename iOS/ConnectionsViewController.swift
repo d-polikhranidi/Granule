@@ -40,7 +40,9 @@ final class ConnectionsViewController: UICollectionViewController {
         }
         Connections.shared.onChange.append { [weak self] in self?.reload() }
         if Connections.shared.endpoints.isEmpty {
-            Connections.shared.save(CHEndpoint(name: String(localized: "Local server")), password: "")
+            var local = CHEndpoint(name: String(localized: "Local server"))
+            local.nameIsSuggested = true
+            Connections.shared.save(local, password: "")
         }
         reload()
     }

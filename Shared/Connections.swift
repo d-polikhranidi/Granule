@@ -65,6 +65,27 @@ final class Connections {
 
     func password(for endpoint: CHEndpoint) -> String { Keychain.password(for: endpoint.id) ?? "" }
 
+    /// Whether another connection than `id` has this name (letter case aside).
+    func isNameTaken(_ name: String, except id: UUID?) -> Bool {
+        let wanted = name.trimmingCharacters(in: .whitespaces).lowercased()
+        return endpoints.contains { $0.id != id && $0.name.trimmingCharacters(in: .whitespaces).lowercased() == wanted }
+    }
+
+    /// `base`, or `base 2`, `base 3`, … : a name no other connection has.
+    func uniqueName(_ base: String, except id: UUID?) -> String {
+        let base = base.trimmingCharacters(in: .whitespaces)
+        guard isNameTaken(base, except: id) else { return base }
+        return (2...).lazy.map { "\(base) \($0)" }.first { !self.isNameTaken($0, except: id) }!
+    }
+
+    /// The name a connection gets until one is typed: the host's, or New server.
+    func suggestedName(host: String, except id: UUID?) -> String {
+        let host = host.trimmingCharacters(in: .whitespaces)
+        let base = host.isEmpty || host == "localhost" ? String(localized: "New server")
+            : host.hasSuffix(".clickhouse.cloud") ? String(host.prefix { $0 != "." }) : host
+        return uniqueName(base, except: id)
+    }
+
     /// The client certificate kept for an endpoint, ready for TLS.
     func clientIdentity(for endpoint: CHEndpoint) -> CHClientIdentity? {
         guard endpoint.clientCertificate != nil, let data = Keychain.data(for: endpoint.id, suffix: ".p12") else { return nil }

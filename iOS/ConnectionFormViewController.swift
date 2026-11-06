@@ -321,7 +321,8 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
     // MARK: The form
 
     private func fill() {
-        nameField.text = endpoint.name
+        // A name made for the connection (New server, the host's) is the field's placeholder, the field empty.
+        nameField.text = endpoint.nameIsSuggested == true ? "" : endpoint.name
         environment = endpoint.environment
         showEnvironment()
         hostField.text = endpoint.host
@@ -341,11 +342,21 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
         sshAuthControl.selectedSegmentIndex = endpoint.ssh?.keyName == nil ? 0 : 1
         sshPasswordField.text = !isNew && endpoint.ssh?.keyName == nil ? Connections.shared.sshSecret(for: endpoint) : ""
         showSSH()
+        nameField.placeholder = endpoint.nameIsSuggested == true && !endpoint.name.isEmpty ? endpoint.name
+            : Connections.shared.suggestedName(host: endpoint.host, except: endpoint.id)
     }
 
     private var edited: CHEndpoint {
         var endpoint = endpoint
-        endpoint.name = nameField.text?.trimmingCharacters(in: .whitespaces) ?? ""
+        // No two connections of one name: a number is added to a name taken.
+        let typed = nameField.text?.trimmingCharacters(in: .whitespaces) ?? ""
+        if typed.isEmpty {
+            endpoint.name = Connections.shared.uniqueName(nameField.placeholder ?? "", except: endpoint.id)
+            endpoint.nameIsSuggested = true
+        } else {
+            endpoint.name = Connections.shared.uniqueName(typed, except: endpoint.id)
+            endpoint.nameIsSuggested = nil
+        }
         endpoint.environment = environment
         endpoint.host = hostField.text?.trimmingCharacters(in: .whitespaces) ?? "localhost"
         endpoint.isSecure = secureSwitch.isOn
@@ -392,7 +403,10 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
         userField.text = parsed.user
         databaseField.text = parsed.database
         if let password { passwordField.text = password }
-        if (nameField.text ?? "").isEmpty { nameField.text = parsed.isCloud ? String(parsed.host.prefix { $0 != "." }) : parsed.host }
+        // Without a name of one's own, the host's is suggested (the field's placeholder).
+        if (nameField.text ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+            nameField.placeholder = Connections.shared.suggestedName(host: parsed.host, except: endpoint.id)
+        }
     }
 
     private func save() {

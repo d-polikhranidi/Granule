@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `-ViewerURL <url>`: a window on that server at launch (not saved); `-ViewerRun <SQL>` run in it.
         if let url = UserDefaults.standard.string(forKey: "ViewerURL"), let (endpoint, password) = CHEndpoint.parse(url) {
             let controller = QueryWindowController(endpoint: endpoint, password: password ?? "")
+            controller.onNewTab = { [weak self] from in self?.open(from.endpoint, password: from.password, tabOf: from) }
             queryWindows.append(controller)
             controller.showWindow(nil)
             controller.connect()
@@ -49,10 +50,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// A window of queries on a server.
     func open(_ endpoint: CHEndpoint) {
-        let controller = QueryWindowController(endpoint: endpoint, password: Connections.shared.password(for: endpoint))
+        open(endpoint, password: Connections.shared.password(for: endpoint), tabOf: nil)
+    }
+
+    /// A window of queries on a server, as a tab of another one's window if given.
+    private func open(_ endpoint: CHEndpoint, password: String, tabOf other: QueryWindowController?) {
+        // The server's tabs are numbered: each keeps its editor's text.
+        let used = Set(queryWindows.filter { $0.endpoint.id == endpoint.id }.map(\.tabNumber))
+        let number = (0...).first { !used.contains($0) } ?? 0
+        let controller = QueryWindowController(endpoint: endpoint, password: password, tabNumber: number)
         controller.onClose = { [weak self, weak controller] in self?.queryWindows.removeAll { $0 === controller } }
+        controller.onNewTab = { [weak self] from in self?.open(from.endpoint, password: from.password, tabOf: from) }
         queryWindows.append(controller)
-        controller.showWindow(nil)
+        if let other, let window = controller.window, let otherWindow = other.window {
+            otherWindow.addTabbedWindow(window, ordered: .above)
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            controller.showWindow(nil)
+        }
         controller.connect()
     }
 
@@ -85,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
         submenu(String(localized: "File"), [
             item(String(localized: "Connections…"), #selector(showConnections(_:)), "n", [.command, .shift]),
+            item(String(localized: "New Tab"), #selector(NSResponder.newWindowForTab(_:)), "t"),
             .separator(),
             item(String(localized: "Close"), #selector(NSWindow.performClose(_:)), "w"),
             item(String(localized: "Export…"), #selector(QueryWindowController.exportResult(_:)), "e"),
@@ -104,6 +120,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         submenu(String(localized: "Query"), [
             item(String(localized: "Run Statement"), #selector(QueryWindowController.runStatement(_:)), "\r"),
             item(String(localized: "Stop"), #selector(QueryWindowController.stopQuery(_:)), "."),
+            .separator(),
+            {
+                let explain = item(String(localized: "Explain Plan"), #selector(QueryWindowController.explainStatement(_:)), "\r", [.command, .option])
+                explain.tag = 0
+                return explain
+            }(),
+            {
+                let explain = item(String(localized: "Explain Pipeline"), #selector(QueryWindowController.explainStatement(_:)))
+                explain.tag = 1
+                return explain
+            }(),
+            {
+                let explain = item(String(localized: "Explain Estimate (parts, rows, marks)"), #selector(QueryWindowController.explainStatement(_:)))
+                explain.tag = 2
+                return explain
+            }(),
+            {
+                let explain = item(String(localized: "Explain Syntax"), #selector(QueryWindowController.explainStatement(_:)))
+                explain.tag = 3
+                return explain
+            }(),
             .separator(),
             item(String(localized: "Show Value"), #selector(QueryWindowController.showValue(_:)), " ", [.command]),
             item(String(localized: "Refresh Schema"), #selector(QueryWindowController.refreshSchema(_:)), "r", [.command, .shift]),

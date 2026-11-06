@@ -25,6 +25,8 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
     private let statusDetails = UIButton(configuration: .borderless())
     private var statusText = ""
     private let certificateButton = UIButton(configuration: .bordered())
+    private let environmentButton = UIButton(configuration: .bordered())
+    private var environment: CHEnvironment?
     private let sshSwitch = UISwitch()
     private let sshStack = UIStackView()
     private let sshHostField = UITextField()
@@ -122,6 +124,7 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
         let stack = UIStackView(arrangedSubviews: [
             row(String(localized: "URL"), field(urlField, String(localized: "Paste a URL: https://user:password@host:8443/db"), keyboard: .URL)),
             row(String(localized: "Name"), field(nameField, String(localized: "Name"))),
+            row(String(localized: "Environment (its color on the list and the editor)"), environmentButton),
             row(String(localized: "Host"), field(hostField, "localhost", keyboard: .URL)),
             row(String(localized: "Port"), field(portField, "8123", keyboard: .numberPad)),
             toggle(String(localized: "Use HTTPS"), secureSwitch),
@@ -176,6 +179,29 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
         scroll.setContentOffset(CGPoint(x: 0, y: max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)), animated: false)
     }
     #endif
+
+    /// The environment chosen, and its menu.
+    private func showEnvironment() {
+        func dot(_ environment: CHEnvironment?) -> UIImage? {
+            environment.flatMap { UIImage(systemName: "circle.fill")?.withTintColor($0.color, renderingMode: .alwaysOriginal) }
+        }
+        var configuration = environmentButton.configuration ?? .bordered()
+        configuration.title = environment?.title ?? String(localized: "None")
+        configuration.image = dot(environment)
+        configuration.imagePadding = 6
+        environmentButton.configuration = configuration
+        let none = UIAction(title: String(localized: "None"), state: environment == nil ? .on : .off) { [weak self] _ in
+            self?.environment = nil
+            self?.showEnvironment()
+        }
+        environmentButton.menu = UIMenu(children: [none] + CHEnvironment.allCases.map { item in
+            UIAction(title: item.title, image: dot(item), state: environment == item ? .on : .off) { [weak self] _ in
+                self?.environment = item
+                self?.showEnvironment()
+            }
+        })
+        environmentButton.showsMenuAsPrimaryAction = true
+    }
 
     private func showCertificate() {
         var configuration = certificateButton.configuration ?? .bordered()
@@ -296,6 +322,8 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
 
     private func fill() {
         nameField.text = endpoint.name
+        environment = endpoint.environment
+        showEnvironment()
         hostField.text = endpoint.host
         portField.text = String(endpoint.port)
         secureSwitch.isOn = endpoint.isSecure
@@ -318,6 +346,7 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
     private var edited: CHEndpoint {
         var endpoint = endpoint
         endpoint.name = nameField.text?.trimmingCharacters(in: .whitespaces) ?? ""
+        endpoint.environment = environment
         endpoint.host = hostField.text?.trimmingCharacters(in: .whitespaces) ?? "localhost"
         endpoint.isSecure = secureSwitch.isOn
         endpoint.port = Int(portField.text ?? "") ?? (endpoint.isSecure ? 8443 : 8123)

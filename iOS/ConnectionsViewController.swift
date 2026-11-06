@@ -27,8 +27,11 @@ final class ConnectionsViewController: UICollectionViewController {
             guard let endpoint = Connections.shared.endpoints.first(where: { $0.id == id }) else { return }
             var content = cell.defaultContentConfiguration()
             content.text = endpoint.title
-            content.secondaryText = "\(endpoint.host):\(endpoint.port)" + (endpoint.isReadOnly ? " · " + String(localized: "read only") : "")
+            content.secondaryText = [endpoint.environment?.title, "\(endpoint.host):\(endpoint.port)",
+                                     endpoint.isReadOnly ? String(localized: "read only") : nil].compactMap { $0 }.joined(separator: " · ")
             content.image = UIImage(systemName: endpoint.isCloud ? "cloud" : "server.rack")
+            // The environment's color says what the server is for.
+            content.imageProperties.tintColor = endpoint.environment?.color
             cell.contentConfiguration = content
             cell.accessories = [.detail { [weak self] in self?.edit(endpoint) }]
         }
@@ -48,6 +51,26 @@ final class ConnectionsViewController: UICollectionViewController {
         snapshot.appendItems(Connections.shared.endpoints.map(\.id))
         snapshot.reconfigureItems(Connections.shared.endpoints.map(\.id))
         dataSource.apply(snapshot, animatingDifferences: false)
+        if Connections.shared.endpoints.isEmpty {
+            var empty = UIContentUnavailableConfiguration.empty()
+            empty.image = UIImage(systemName: "server.rack")
+            empty.text = String(localized: "No Connections")
+            empty.secondaryText = String(localized: "Add a ClickHouse server. A URL pasted into the form fills it in.")
+            var button = UIButton.Configuration.borderedProminent()
+            button.title = String(localized: "Add Connection")
+            empty.button = button
+            empty.buttonProperties.primaryAction = UIAction { [weak self] _ in self?.edit(nil) }
+            contentUnavailableConfiguration = empty
+        } else {
+            contentUnavailableConfiguration = nil
+        }
+    }
+
+    /// File > New Connection (⌘N), from wherever the window is.
+    @objc func newConnection(_ sender: Any?) {
+        var top: UIViewController = self
+        while let presented = top.presentedViewController { top = presented }
+        top.present(UINavigationController(rootViewController: ConnectionFormViewController(endpoint: CHEndpoint(name: ""), isNew: true)), animated: true)
     }
 
     private func swipeActions(at indexPath: IndexPath) -> UISwipeActionsConfiguration? {

@@ -106,6 +106,20 @@ void ch_seconds_range(const void *src, int precision, size_t start, size_t count
 size_t ch_format_uuids(const uint8_t *src, const uint8_t *nulls, size_t start, size_t count, char *out, uint32_t *ends, uint32_t base);
 size_t ch_format_ipv4s(const uint32_t *src, const uint8_t *nulls, size_t start, size_t count, char *out, uint32_t *ends, uint32_t base);
 
+// MARK: Charts
+
+/// The least and most of `count` values (NaN left out); NaN both for none.
+void ch_range(const double *values, size_t count, double *least, double *most);
+
+/// Whether `count` values (NaN left out) never go down.
+int ch_is_ascending(const double *values, size_t count);
+
+/// Points (`x[i]`, `y[i]`) into `buckets` buckets of x over [x0, x1]: each
+/// bucket's least, most and sum of y and how many (NaN on either side left
+/// out). The arrays have `buckets` entries; `least`/`most` start as +/-inf.
+void ch_bucket(const double *x, const double *y, size_t count, double x0, double x1, size_t buckets,
+               double *least, double *most, double *sum, uint32_t *counts);
+
 #ifdef __cplusplus
 }
 #endif

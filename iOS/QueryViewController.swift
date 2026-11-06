@@ -36,6 +36,10 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     private let detailsBar = UIStackView()
     private let detailsButton = UIButton(configuration: .gray())
     private var detailsTable: Schema.Table?
+    /// The result as a chart (More > Show Chart), its columns in the bar's menus.
+    private let chart = ChartController()
+    private let chartBar = UIStackView()
+    private var isShowingChart = false
     /// The server's clusters (the views can read across one).
     private var clusters: [String] = []
 
@@ -105,7 +109,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         statusLabel.adjustsFontForContentSizeCategory = true
 
         let results = UIView()
-        for content in [table, textOutput] as [UIView] {
+        chart.view.isHidden = true
+        for content in [table, textOutput, chart.view] as [UIView] {
             content.translatesAutoresizingMaskIntoConstraints = false
             results.addSubview(content)
             NSLayoutConstraint.activate([
@@ -138,7 +143,12 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         detailsBar.isLayoutMarginsRelativeArrangement = true
         detailsBar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 2, trailing: 12)
         detailsBar.isHidden = true
-        let stack = UIStackView(arrangedSubviews: [editor, checkBar, detailsBar, messageLabel, results, statusLabel])
+        chartBar.spacing = 8
+        chartBar.isLayoutMarginsRelativeArrangement = true
+        chartBar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 2, trailing: 12)
+        chartBar.isHidden = true
+        chart.onChange = { [weak self] in self?.updateChartBar() }
+        let stack = UIStackView(arrangedSubviews: [editor, checkBar, detailsBar, chartBar, messageLabel, results, statusLabel])
         stack.axis = .vertical
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -188,6 +198,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                         self.showDetails(of: Schema.Table(database: parts[0], name: parts[1], engine: "", rows: nil, bytes: nil, comment: ""),
                                          TableDetail(rawValue: UserDefaults.standard.string(forKey: "ViewerDetail") ?? "") ?? .overview)
                     }
+                    if let self, UserDefaults.standard.bool(forKey: "ViewerChart") { self.toggleChart() }
                     if let self, let sql = UserDefaults.standard.string(forKey: "ViewerPlan") {
                         self.editor.text = sql
                         self.showPlan(of: sql)
@@ -375,7 +386,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     private func showText(_ text: String?) {
         textOutput.isHidden = text == nil
-        table.isHidden = text != nil
+        table.isHidden = text != nil || isShowingChart
+        chart.view.isHidden = text != nil || !isShowingChart
         textOutput.text = text ?? ""
     }
 
@@ -384,7 +396,60 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         messageLabel.isHidden = false
     }
 
+    // MARK: Chart
+
+    private func toggleChart() {
+        isShowingChart.toggle()
+        textOutput.isHidden = true
+        table.isHidden = isShowingChart
+        chart.view.isHidden = !isShowingChart
+        chartBar.isHidden = !isShowingChart
+        updateChartBar()
+    }
+
+    private func updateChart() {
+        guard isShowingChart else { return }
+        chart.update(source: queries.source, table: table, isRunning: queries.isRunning, timeZone: client.serverInfo?.zone ?? .gmt)
+    }
+
+    /// The bar's menus: the column along x, the measures, the kind.
+    private func updateChartBar() {
+        chartBar.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        func button(_ title: String, _ menu: UIMenu) -> UIButton {
+            var configuration = UIButton.Configuration.gray()
+            configuration.title = title
+            configuration.buttonSize = .small
+            configuration.cornerStyle = .capsule
+            configuration.image = UIImage(systemName: "chevron.up.chevron.down")
+            configuration.imagePlacement = .trailing
+            configuration.imagePadding = 4
+            let button = UIButton(configuration: configuration)
+            button.menu = menu
+            button.showsMenuAsPrimaryAction = true
+            return button
+        }
+        let xName = chart.columns.first { $0.index == chart.x }?.name ?? "—"
+        let along = UIMenu(children: chart.columns.map { column in
+            UIAction(title: column.name, state: column.index == chart.x ? .on : .off) { [weak self] _ in self?.chart.choose(x: column.index) }
+        })
+        let measures = chart.columns.filter { $0.isNumber && $0.index != chart.x }
+        let yNames = chart.ys.compactMap { y in chart.columns.first { $0.index == y }?.name }.joined(separator: ", ")
+        let measureMenu = UIMenu(children: measures.map { column in
+            UIAction(title: column.name, state: chart.ys.contains(column.index) ? .on : .off) { [weak self] _ in self?.chart.toggle(y: column.index) }
+        })
+        let kinds: [(ChartModel.Kind, String)] = [(.automatic, String(localized: "Automatic")), (.line, String(localized: "Line")), (.bars, String(localized: "Bars"))]
+        let kindMenu = UIMenu(children: kinds.map { kind, title in
+            UIAction(title: title, state: chart.kind == kind ? .on : .off) { [weak self] _ in self?.chart.kind = kind }
+        })
+        chartBar.addArrangedSubview(button(xName, along))
+        chartBar.addArrangedSubview(button(yNames.isEmpty ? "—" : yNames, measureMenu))
+        chartBar.addArrangedSubview(button(kinds.first { $0.0 == chart.kind }?.1 ?? "", kindMenu))
+        chartBar.addArrangedSubview(UIView())
+        updateChart()
+    }
+
     private func updateStatus() {
+        updateChart()
         statusLabel.textColor = .secondaryLabel
         statusLabel.text = queries.status
         if let error = queries.error { show(error) }
@@ -539,7 +604,9 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                 if let view = queries.view { show(view) }
             }
         })
-        return [historyMenu, check, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize]
+        let chartAction = UIAction(title: isShowingChart ? String(localized: "Show Table") : String(localized: "Show Chart"),
+                                   image: UIImage(systemName: isShowingChart ? "tablecells" : "chart.xyaxis.line")) { [weak self] _ in self?.toggleChart() }
+        return [chartAction, historyMenu, check, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize]
     }
 
     private func resizeEditor(by delta: CGFloat) {

@@ -569,3 +569,45 @@ size_t ch_format_uuids(const uint8_t *src, const uint8_t *nulls, size_t start, s
 size_t ch_format_ipv4s(const uint32_t *src, const uint8_t *nulls, size_t start, size_t count, char *out, uint32_t *ends, uint32_t base) {
     FOR_VALUES(at += ch_format_ipv4(src[index], out + at));
 }
+
+// MARK: Charts
+
+void ch_range(const double *values, size_t count, double *least, double *most) {
+    double low = INFINITY, high = -INFINITY;
+    for (size_t i = 0; i < count; i++) {
+        double value = values[i];
+        // NaN compares false both ways: left out.
+        low = value < low ? value : low;
+        high = value > high ? value : high;
+    }
+    *least = low <= high ? low : NAN;
+    *most = low <= high ? high : NAN;
+}
+
+int ch_is_ascending(const double *values, size_t count) {
+    double last = -INFINITY;
+    for (size_t i = 0; i < count; i++) {
+        double value = values[i];
+        if (value != value) continue;
+        if (value < last) return 0;
+        last = value;
+    }
+    return 1;
+}
+
+void ch_bucket(const double *x, const double *y, size_t count, double x0, double x1, size_t buckets,
+               double *least, double *most, double *sum, uint32_t *counts) {
+    if (buckets == 0) return;
+    double span = x1 - x0;
+    double scale = span > 0 ? (double)(buckets - 1) / span : 0;
+    for (size_t i = 0; i < count; i++) {
+        double px = x[i], py = y[i];
+        if (px != px || py != py || px < x0 || px > x1) continue;
+        size_t bucket = (size_t)((px - x0) * scale + 0.5);
+        if (bucket >= buckets) bucket = buckets - 1;
+        if (py < least[bucket]) least[bucket] = py;
+        if (py > most[bucket]) most[bucket] = py;
+        sum[bucket] += py;
+        counts[bucket] += 1;
+    }
+}

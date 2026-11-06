@@ -2,9 +2,30 @@ import ClickHouseCore
 import UIKit
 
 /// The servers the user added: tap one to open it, swipe to edit or remove,
-/// + to add one (a URL pasted fills its form in).
-final class ConnectionsViewController: UICollectionViewController {
+/// + to add one (a URL pasted fills its form in). On the iPad a connection
+/// opens in a window of its own too (its menu, or dragged out of the list).
+final class ConnectionsViewController: UICollectionViewController, UICollectionViewDragDelegate {
     private var dataSource: UICollectionViewDiffableDataSource<Int, UUID>!
+    /// The connection this window shows, if one is open (its window is restored to it).
+    private(set) var shownEndpoint: CHEndpoint?
+
+    /// A window on one connection, as the system keeps and hands it back.
+    static let activityType = "by.digitalglobe.Clickhouse-Viewer.connection"
+
+    static func activity(for endpoint: CHEndpoint) -> NSUserActivity {
+        let activity = NSUserActivity(activityType: activityType)
+        activity.title = endpoint.title
+        activity.userInfo = ["id": endpoint.id.uuidString]
+        activity.targetContentIdentifier = endpoint.id.uuidString
+        return activity
+    }
+
+    /// The saved connection an activity is for.
+    static func endpoint(of activity: NSUserActivity?) -> CHEndpoint? {
+        guard let activity, activity.activityType == activityType, let text = activity.userInfo?["id"] as? String,
+              let id = UUID(uuidString: text) else { return nil }
+        return Connections.shared.endpoints.first { $0.id == id }
+    }
 
     init() {
         var configuration = UICollectionLayoutListConfiguration(appearance: .insetGrouped)
@@ -44,6 +65,7 @@ final class ConnectionsViewController: UICollectionViewController {
             collectionView.dequeueConfiguredReusableCell(using: registration, for: indexPath, item: id)
         }
         Connections.shared.onChange.append { [weak self] in self?.reload() }
+        collectionView.dragDelegate = self
         if Connections.shared.endpoints.isEmpty {
             var local = CHEndpoint(name: String(localized: "Local server"))
             local.nameIsSuggested = true
@@ -93,6 +115,48 @@ final class ConnectionsViewController: UICollectionViewController {
             done(true)
         }
         return UISwipeActionsConfiguration(actions: [remove, edit])
+    }
+
+    /// A connection's menu: Connect, Open in New Window (where there can be more than one), Edit, Remove.
+    override func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
+                                 point: CGPoint) -> UIContextMenuConfiguration? {
+        guard let indexPath = indexPaths.first, let id = dataSource.itemIdentifier(for: indexPath),
+              let endpoint = Connections.shared.endpoints.first(where: { $0.id == id }) else { return nil }
+        return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
+            var actions: [UIMenuElement] = [
+                UIAction(title: String(localized: "Connect"), image: UIImage(systemName: "bolt.horizontal")) { _ in
+                    self?.open(endpoint, password: Connections.shared.password(for: endpoint))
+                },
+            ]
+            if UIApplication.shared.supportsMultipleScenes {
+                actions.append(UIAction(title: String(localized: "Open in New Window"), image: UIImage(systemName: "macwindow.badge.plus")) { _ in
+                    Self.openInNewWindow(endpoint)
+                })
+            }
+            actions.append(UIAction(title: String(localized: "Edit"), image: UIImage(systemName: "pencil")) { _ in self?.edit(endpoint) })
+            actions.append(UIAction(title: String(localized: "Remove"), image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
+                Connections.shared.remove(endpoint)
+            })
+            return UIMenu(children: actions)
+        })
+    }
+
+    /// A window of its own for a connection, connected there.
+    static func openInNewWindow(_ endpoint: CHEndpoint) {
+        let request = UISceneSessionActivationRequest(role: .windowApplication, userActivity: activity(for: endpoint))
+        UIApplication.shared.activateSceneSession(for: request)
+    }
+
+    /// A connection dragged out of the list: dropped at the screen's edge, it opens in a new window.
+    func collectionView(_ collectionView: UICollectionView, itemsForBeginning session: any UIDragSession, at indexPath: IndexPath) -> [UIDragItem] {
+        guard let id = dataSource.itemIdentifier(for: indexPath), let endpoint = Connections.shared.endpoints.first(where: { $0.id == id }) else {
+            return []
+        }
+        let provider = NSItemProvider()
+        provider.registerObject(Self.activity(for: endpoint), visibility: .all)
+        let item = UIDragItem(itemProvider: provider)
+        item.localObject = endpoint.id
+        return [item]
     }
 
     override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -177,7 +241,14 @@ final class ConnectionsViewController: UICollectionViewController {
         // On an iPhone: the editor and result first, the schema a tap back.
         split.delegate = query
         split.modalPresentationStyle = .fullScreen
-        query.onClose = { [weak split] in split?.dismiss(animated: true) }
+        // The window is named for its server (the app switcher shows it) and comes back to it.
+        shownEndpoint = endpoint
+        view.window?.windowScene?.title = endpoint.title
+        query.onClose = { [weak self, weak split] in
+            self?.shownEndpoint = nil
+            self?.view.window?.windowScene?.title = nil
+            split?.dismiss(animated: true)
+        }
         present(split, animated: true) {
             // Upright, the result first: the schema slides over it from its button.
             if split.view.bounds.width < split.view.bounds.height, !split.isCollapsed { split.hide(.primary) }

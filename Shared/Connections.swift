@@ -1,4 +1,5 @@
 import ClickHouseCore
+import CryptoKit
 import Foundation
 import Security
 #if os(macOS)
@@ -25,13 +26,18 @@ final class Connections {
     var onChange: [() -> Void] = []
 
     private init() {
-        #if DEBUG
-        if Self.isChecking { UserDefaults.standard.removeObject(forKey: Self.key) }
-        #endif
         if let data = UserDefaults.standard.data(forKey: Self.key),
            let saved = try? JSONDecoder().decode([CHEndpoint].self, from: data) {
             endpoints = saved
         }
+        #if DEBUG
+        // The last check's connections gone, with all that was kept for them.
+        if Self.isChecking {
+            endpoints.forEach { Self.forget($0.id) }
+            endpoints = []
+            UserDefaults.standard.removeObject(forKey: Self.key)
+        }
+        #endif
     }
 
     private func save() {
@@ -52,9 +58,32 @@ final class Connections {
 
     func remove(_ endpoint: CHEndpoint) {
         endpoints.removeAll { $0.id == endpoint.id }
-        Keychain.removePassword(for: endpoint.id)
+        Self.forget(endpoint.id)
         save()
     }
+
+    /// Whether the connection is in the list (not removed, not a server opened without saving it).
+    func keeps(_ id: UUID) -> Bool { endpoints.contains { $0.id == id } }
+
+    /// Everything kept for a connection: its password, SSH secret and client certificate,
+    /// its windows' places and editors' texts (the defaults named with its id), its history.
+    static func forget(_ id: UUID) {
+        Keychain.removePassword(for: id)
+        Keychain.removeData(for: id, suffix: ".ssh")
+        removeClientCertificate(for: id)
+        let defaults = UserDefaults.standard
+        for key in defaults.dictionaryRepresentation().keys where key.contains(id.uuidString) { defaults.removeObject(forKey: key) }
+        QueryHistory.remove(for: id)
+    }
+
+    #if DEBUG
+    /// `-ViewerURL`'s server: the same id for the same URL, so test runs share one window
+    /// place and history instead of leaving another set each time.
+    static func debugID(for url: String) -> UUID {
+        let digest = Array(SHA256.hash(data: Data(url.utf8)))
+        return digest.withUnsafeBufferPointer { NSUUID(uuidBytes: $0.baseAddress) as UUID }
+    }
+    #endif
 
     func move(from source: Int, to destination: Int) {
         guard endpoints.indices.contains(source) else { return }
@@ -194,12 +223,21 @@ final class QueryHistory {
     }
 
     init(endpoint: CHEndpoint) {
+        file = Self.file(for: endpoint.id)
+        if let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode([Entry].self, from: data) { entries = saved }
+    }
+
+    private static func file(for id: UUID) -> URL {
         let folder = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
             ?? FileManager.default.temporaryDirectory
         let history = folder.appending(path: "History", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: history, withIntermediateDirectories: true)
-        file = history.appending(path: endpoint.id.uuidString + ".json")
-        if let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode([Entry].self, from: data) { entries = saved }
+        return history.appending(path: id.uuidString + ".json")
+    }
+
+    /// A removed connection's history.
+    static func remove(for id: UUID) {
+        try? FileManager.default.removeItem(at: file(for: id))
     }
 
     func add(_ sql: String, rows: Int?, seconds: Double?) {

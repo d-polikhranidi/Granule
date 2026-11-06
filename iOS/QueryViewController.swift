@@ -190,6 +190,12 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        saveEditor()
+    }
+
+    /// The editor's text kept for its connection (not for one removed or never saved).
+    private func saveEditor() {
+        guard Connections.shared.keeps(endpoint.id) else { return }
         UserDefaults.standard.set(editor.text, forKey: "Editor \(endpoint.id.uuidString)")
     }
 
@@ -257,7 +263,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     private func close() {
         queries.cancel()
         statusTimer?.invalidate()
-        UserDefaults.standard.set(editor.text, forKey: "Editor \(endpoint.id.uuidString)")
+        saveEditor()
         onClose()
     }
 

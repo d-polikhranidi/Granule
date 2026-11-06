@@ -13,6 +13,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
+        // `-ViewerAppearance dark|light`: the app in that appearance (screenshots of both).
+        if let name = UserDefaults.standard.string(forKey: "ViewerAppearance") {
+            NSApp.appearance = NSAppearance(named: name == "dark" ? .darkAqua : .aqua)
+        }
         // `-ViewerURL <url>`: a window on that server at launch (not saved); `-ViewerRun <SQL>` run in it.
         if let url = UserDefaults.standard.string(forKey: "ViewerURL"), var (endpoint, password) = CHEndpoint.parse(url) {
             Connections.debugBastion(for: &endpoint)
@@ -51,6 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         connections?.showWindow(sender)
         connections?.window?.makeKeyAndOrderFront(sender)
+    }
+
+    /// The connections window with a new connection in its form.
+    @objc func newConnection(_ sender: Any?) {
+        showConnections(sender)
+        connections?.addConnection(sender)
     }
 
     /// A window of queries on a server.
@@ -110,6 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item(String(localized: "Quit \(name)"), #selector(NSApplication.terminate(_:)), "q"),
         ])
         submenu(String(localized: "File"), [
+            item(String(localized: "New Connection…"), #selector(newConnection(_:)), "n"),
             item(String(localized: "Connections…"), #selector(showConnections(_:)), "n", [.command, .shift]),
             item(String(localized: "New Tab"), #selector(NSResponder.newWindowForTab(_:)), "t"),
             .separator(),

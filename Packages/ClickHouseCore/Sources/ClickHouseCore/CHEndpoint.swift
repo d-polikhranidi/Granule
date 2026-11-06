@@ -25,6 +25,8 @@ public struct CHEndpoint: Codable, Sendable, Hashable, Identifiable {
     public var clientCertificate: String?
     /// The SSH server the server is reached through, when it's behind one.
     public var ssh: CHSSHBastion?
+    /// What the server is for, shown by its color (production in red), or none.
+    public var environment: CHEnvironment?
 
     public init(id: UUID = UUID(), name: String = "", host: String = "localhost", port: Int = 8123, isSecure: Bool = false,
                 user: String = "default", database: String = "", isReadOnly: Bool = false, trust: CHTrust = .system,
@@ -182,6 +184,12 @@ public enum CHCompression: String, Codable, Sendable, Hashable, CaseIterable {
     /// ClickHouse's LZ4 frames (`compress=1`).
     case lz4
     case none
+}
+
+/// What a connection's server is for: its color in the list and on its
+/// window, so a production server isn't taken for a test one.
+public enum CHEnvironment: String, Codable, Sendable, Hashable, CaseIterable {
+    case local, development, testing, staging, production
 }
 
 /// An SSH server ("bastion", "jump host") a ClickHouse server is reached

@@ -1,6 +1,11 @@
 import ClickHouseCore
 import Foundation
 import Security
+#if os(macOS)
+import AppKit
+#else
+import UIKit
+#endif
 
 /// The servers the user added: kept in the app's defaults, their passwords
 /// in the Keychain.
@@ -8,9 +13,9 @@ final class Connections {
     static let shared = Connections()
 
     #if DEBUG
-    /// `-ViewerForm testfail` runs on a list and Keychain entries of its own (the
+    /// `-ViewerForm testfail` and `ssh` run on a list and Keychain entries of their own (the
     /// user's aren't touched, and nothing made by another build is read).
-    static let isChecking = UserDefaults.standard.string(forKey: "ViewerForm") == "testfail"
+    static let isChecking = ["testfail", "ssh"].contains(UserDefaults.standard.string(forKey: "ViewerForm"))
     private static let key = isChecking ? "ConnectionsForChecks" : "Connections"
     #else
     private static let key = "Connections"
@@ -185,3 +190,26 @@ final class QueryHistory {
         if let data = try? JSONEncoder().encode(entries) { try? data.write(to: file, options: .atomic) }
     }
 }
+
+extension CHEnvironment {
+    var title: String {
+        switch self {
+        case .local: String(localized: "Local")
+        case .development: String(localized: "Development")
+        case .testing: String(localized: "Testing")
+        case .staging: String(localized: "Staging")
+        case .production: String(localized: "Production")
+        }
+    }
+
+    var color: PlatformColor {
+        switch self {
+        case .local: .systemGray
+        case .development: .systemBlue
+        case .testing: .systemTeal
+        case .staging: .systemOrange
+        case .production: .systemRed
+        }
+    }
+}
+

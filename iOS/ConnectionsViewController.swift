@@ -88,9 +88,48 @@ final class ConnectionsViewController: UICollectionViewController {
         present(UINavigationController(rootViewController: form), animated: true)
     }
 
-    /// The server's schema beside its editor and result.
+    /// Connects, then shows the server's schema beside its editor and result;
+    /// an error is said here, with the form a tap away.
     func open(_ endpoint: CHEndpoint, password: String) {
         let client = CHClient(endpoint: endpoint, password: password, identity: Connections.shared.clientIdentity(for: endpoint))
+        let waiting = UIAlertController(title: String(localized: "Connecting to \(endpoint.title)…"),
+                                        message: endpoint.isCloud ? String(localized: "A sleeping service takes a while to wake.") : nil,
+                                        preferredStyle: .alert)
+        let attempt = Task {
+            do {
+                try await Connections.shared.route(client, for: endpoint)
+                _ = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)
+                try Task.checkCancellation()
+                waiting.dismiss(animated: true) { [weak self] in self?.show(endpoint, client: client) }
+            } catch where Task.isCancelled {
+                waiting.dismiss(animated: true)
+            } catch {
+                waiting.dismiss(animated: true) { [weak self] in self?.showFailure(error, of: endpoint) }
+            }
+        }
+        waiting.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel) { _ in attempt.cancel() })
+        present(waiting, animated: true)
+    }
+
+    private func showFailure(_ error: Error, of endpoint: CHEndpoint) {
+        let alert = UIAlertController(title: String(localized: "Can't connect to \(endpoint.title)"), message: error.viewerSummary, preferredStyle: .alert)
+        if error.viewerSummary != error.viewerDescription {
+            alert.addAction(UIAlertAction(title: String(localized: "Details"), style: .default) { [weak self] _ in
+                let details = UIAlertController(title: String(localized: "The server's message"), message: error.viewerDescription, preferredStyle: .alert)
+                details.addAction(UIAlertAction(title: String(localized: "Copy"), style: .default) { _ in UIPasteboard.general.string = error.viewerDescription })
+                details.addAction(UIAlertAction(title: String(localized: "OK"), style: .cancel))
+                self?.present(details, animated: true)
+            })
+        }
+        if Connections.shared.endpoints.contains(where: { $0.id == endpoint.id }) {
+            alert.addAction(UIAlertAction(title: String(localized: "Edit Connection"), style: .default) { [weak self] _ in self?.edit(endpoint) })
+        }
+        alert.addAction(UIAlertAction(title: String(localized: "OK"), style: .cancel))
+        present(alert, animated: true)
+    }
+
+    /// The schema beside the editor and result, on a connected client.
+    private func show(_ endpoint: CHEndpoint, client: CHClient) {
         let query = QueryViewController(endpoint: endpoint, client: client)
         let schema = SchemaViewController(client: client)
         schema.onShowRows = { [weak query] table in query?.showRows(of: table) }

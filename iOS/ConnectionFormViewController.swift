@@ -21,6 +21,9 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
     private let compressionControl = UISegmentedControl(items: [String(localized: "Automatic"), "LZ4", String(localized: "None")])
     private let fingerprintField = UITextField()
     private let statusLabel = UILabel()
+    /// The whole of a long message (the status shows its first paragraph).
+    private let statusDetails = UIButton(configuration: .borderless())
+    private var statusText = ""
     private let certificateButton = UIButton(configuration: .bordered())
     private let sshSwitch = UISwitch()
     private let sshStack = UIStackView()
@@ -132,12 +135,20 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
             toggle(String(localized: "Through an SSH server (a bastion)"), sshSwitch),
             sshStack,
             statusLabel,
+            statusDetails,
             UIButton(configuration: .bordered(), primaryAction: UIAction(title: String(localized: "Test Connection")) { [weak self] _ in self?.test() }),
         ])
         stack.axis = .vertical
         stack.spacing = 14
         stack.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.numberOfLines = 0
+        statusLabel.numberOfLines = 3
+        var details = statusDetails.configuration ?? .borderless()
+        details.title = String(localized: "Details…")
+        details.contentInsets = .zero
+        statusDetails.configuration = details
+        statusDetails.contentHorizontalAlignment = .leading
+        statusDetails.isHidden = true
+        statusDetails.addAction(UIAction { [weak self] _ in self?.showStatusDetails() }, for: .primaryActionTriggered)
         statusLabel.font = .preferredFont(forTextStyle: .footnote)
         statusLabel.textColor = .secondaryLabel
         let scroll = UIScrollView()
@@ -216,9 +227,8 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
                 endpoint.clientCertificate = try Connections.storeClientCertificate(data, password: alert?.textFields?.first?.text ?? "", for: endpoint.id)
                 showCertificate()
             } catch {
-                statusLabel.text = (error as? CHClientIdentity.Failure) == .wrongPassword
-                    ? String(localized: "The file's password is wrong.") : String(localized: "The file isn't a PKCS#12 certificate with its key.")
-                statusLabel.textColor = .systemRed
+                showStatus((error as? CHClientIdentity.Failure) == .wrongPassword
+                    ? String(localized: "The file's password is wrong.") : String(localized: "The file isn't a PKCS#12 certificate with its key."), isError: true)
             }
         })
         present(alert, animated: true)
@@ -268,10 +278,9 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
         do {
             _ = try CHSSHKey.parse(text)
             pendingKey = (name, text)
-            statusLabel.text = ""
+            showStatus("")
         } catch {
-            statusLabel.text = (error as? CHSSHKey.Failure)?.description ?? CHSSHKey.Failure.unreadable.description
-            statusLabel.textColor = .systemRed
+            showStatus((error as? CHSSHKey.Failure)?.description ?? CHSSHKey.Failure.unreadable.description, isError: true)
         }
         showSSH()
     }
@@ -366,15 +375,14 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
 
     private func test() {
         let endpoint = edited
-        statusLabel.text = String(localized: "Connecting…")
-        statusLabel.textColor = .secondaryLabel
+        showStatus(String(localized: "Connecting…"))
         let client = CHClient(endpoint: endpoint, password: passwordField.text ?? "", identity: Connections.shared.clientIdentity(for: endpoint))
         // The form's secret, not yet saved.
         let secret = endpoint.ssh?.keyName == nil ? sshPasswordField.text ?? "" : pendingKey?.text
         Task {
             do {
                 if endpoint.ssh != nil {
-                    statusLabel.text = String(localized: "Connecting to the SSH server…")
+                    showStatus(String(localized: "Connecting to the SSH server…"))
                     if let hostKey = try await Connections.shared.route(client, for: endpoint, secret: secret) {
                         // Seen first now: kept when the form is saved.
                         if self.endpoint.ssh?.knownHostKey == nil { self.endpoint.ssh = endpoint.ssh; self.endpoint.ssh?.knownHostKey = hostKey }
@@ -382,12 +390,27 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
                     }
                 }
                 let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 15)
-                statusLabel.text = String(localized: "Connected: ClickHouse \(info.version.text), \(info.user), \(info.timeZone)")
+                showStatus(String(localized: "Connected: ClickHouse \(info.version.text), \(info.user), \(info.timeZone)"))
             } catch {
-                statusLabel.text = error.viewerDescription
-                statusLabel.textColor = .systemRed
+                showStatus(error.viewerDescription, isError: true)
             }
         }
+    }
+
+    /// A message under the form: its first paragraph (a server's error can be a
+    /// page long), the whole in Details.
+    private func showStatus(_ text: String, isError: Bool = false) {
+        statusText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        statusLabel.text = statusText.firstParagraph
+        statusLabel.textColor = isError ? .systemRed : .secondaryLabel
+        statusDetails.isHidden = statusText.firstParagraph == statusText
+    }
+
+    private func showStatusDetails() {
+        let alert = UIAlertController(title: String(localized: "The server's message"), message: statusText, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "Copy"), style: .default) { [statusText] _ in UIPasteboard.general.string = statusText })
+        alert.addAction(UIAlertAction(title: String(localized: "OK"), style: .cancel))
+        present(alert, animated: true)
     }
 
     func textFieldShouldReturn(_ textField: UITextField) -> Bool {

@@ -184,12 +184,18 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         statusLabel.text = endpoint.isCloud ? String(localized: "Connecting (a sleeping service takes a while to wake)…") : String(localized: "Connecting…")
         Task {
             do {
-                if let bastion = endpoint.ssh {
-                    statusLabel.text = String(localized: "Connecting to the SSH server \(bastion.host)…")
-                    try await Connections.shared.route(client, for: endpoint)
-                    statusLabel.text = String(localized: "Connecting…")
+                // Connected already when the list checked it.
+                let info: CHServerInfo
+                if let known = client.serverInfo {
+                    info = known
+                } else {
+                    if let bastion = endpoint.ssh {
+                        statusLabel.text = String(localized: "Connecting to the SSH server \(bastion.host)…")
+                        try await Connections.shared.route(client, for: endpoint)
+                        statusLabel.text = String(localized: "Connecting…")
+                    }
+                    info = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)
                 }
-                let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)
                 statusLabel.text = String(localized: "Connected to ClickHouse \(info.version.text) (\(info.timeZone)).")
                 onConnected()
                 Task { [weak self, client] in self?.clusters = await ServerView.clusters(client) }

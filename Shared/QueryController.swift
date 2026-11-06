@@ -475,6 +475,10 @@ final class QueryController {
 
 extension Error {
     /// What the viewer says of an error.
+    /// The first paragraph of `viewerDescription`: a server's error can go on
+    /// for a page (where its passwords are kept, …), the rest is in details.
+    var viewerSummary: String { viewerDescription.firstParagraph }
+
     var viewerDescription: String {
         let error: Error = self
         switch error {
@@ -490,5 +494,13 @@ extension Error {
         case let error as CHSSHKey.Failure: return error.description
         default: return localizedDescription
         }
+    }
+}
+
+extension String {
+    /// The text up to its first empty line.
+    var firstParagraph: String {
+        let text = trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.components(separatedBy: "\n\n").first ?? text
     }
 }

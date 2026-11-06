@@ -16,6 +16,10 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
     var onShowView: (ServerView) -> Void = { _ in }
     /// A table's details to show (engine and keys, columns, partitions, …).
     var onShowDetails: (Schema.Table) -> Void = { _ in }
+    /// The views' scope changed: this server (`nil`) or a cluster.
+    var onChooseCluster: (String?) -> Void = { _ in }
+    /// Under the filter: the Server section's scope, when the server has clusters.
+    private let scopePopUp = NSPopUpButton()
 
     private let outline = NSOutlineView()
     private let filterField = NSSearchField()
@@ -67,7 +71,12 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         filterField.placeholderString = String(localized: "Filter tables")
         filterField.target = self
         filterField.action = #selector(filterChanged(_:))
-        let stack = NSStackView(views: [filterField, scroll])
+        scopePopUp.controlSize = .small
+        scopePopUp.target = self
+        scopePopUp.action = #selector(scopeChanged(_:))
+        scopePopUp.isHidden = true
+        scopePopUp.toolTip = String(localized: "What the Server section's views read: this server, or every server of a cluster")
+        let stack = NSStackView(views: [filterField, scopePopUp, scroll])
         stack.orientation = .vertical
         stack.spacing = 6
         stack.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 0, right: 8)
@@ -91,6 +100,15 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         items = [Item(.message(String(localized: "Loading…")))]
         outline.reloadData()
         Task {
+            let clusters = await ServerView.clusters(client)
+            scopePopUp.removeAllItems()
+            scopePopUp.addItem(withTitle: String(localized: "Views of this server"))
+            for cluster in clusters { scopePopUp.addItem(withTitle: String(localized: "Views of cluster \(cluster)")) }
+            scopePopUp.lastItem?.representedObject = nil
+            for (index, cluster) in clusters.enumerated() { scopePopUp.item(at: index + 1)?.representedObject = cluster }
+            scopePopUp.isHidden = clusters.isEmpty
+            // The scope chosen before stays (a reload doesn't change what the views read).
+            if let chosen = selectedCluster, let index = clusters.firstIndex(of: chosen) { scopePopUp.selectItem(at: index + 1) }
             do {
                 schema = try await Schema.load(client)
                 rebuild()
@@ -133,6 +151,14 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
 
     func outlineViewItemDidExpand(_ notification: Notification) {
         if let item = notification.userInfo?["NSObject"] as? Item, case .server = item.kind { serverCollapsed = false }
+    }
+
+    /// The cluster the views read across (`nil`: this server).
+    var selectedCluster: String?
+
+    @objc private func scopeChanged(_ sender: NSPopUpButton) {
+        selectedCluster = sender.selectedItem?.representedObject as? String
+        onChooseCluster(selectedCluster)
     }
 
     @objc private func filterChanged(_ sender: Any?) {

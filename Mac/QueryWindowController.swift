@@ -98,6 +98,12 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         sidebar.onShowCreate = { [weak self] table in self?.showCreate(of: table) }
         sidebar.onInsert = { [weak self] text in self?.insert(text) }
         sidebar.onShowDetails = { [weak self] table in self?.showDetails(of: table, .overview) }
+        sidebar.onChooseCluster = { [weak self] cluster in
+            guard let self else { return }
+            queries.cluster = cluster
+            // The view shown, read again in its new scope.
+            if let view = queries.view { sidebar.onShowView(view) }
+        }
         sidebar.onShowView = { [weak self] view in
             self?.hideDetails()
             self?.messageLabel.isHidden = true
@@ -107,6 +113,13 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
 
         queries.onChange = { [weak self] in self?.updateStatus() }
         queries.onText = { [weak self] text in self?.showText(text) }
+        queries.onKillFailure = { [weak self] error in
+            guard let window = self?.window else { return }
+            let alert = NSAlert()
+            alert.messageText = String(localized: "Not everything was killed")
+            alert.informativeText = error.viewerDescription
+            alert.beginSheetModal(for: window)
+        }
     }
 
     private func buildPane() -> NSView {
@@ -276,6 +289,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                     editor.string = sql
                     showPlan(of: sql)
                 }
+                // `-ViewerCluster <name>`: the views read across that cluster.
+                if let cluster = UserDefaults.standard.string(forKey: "ViewerCluster") { queries.cluster = cluster }
                 // `-ViewerView <name>`: a server view shown (processes, merges, …).
                 if let name = UserDefaults.standard.string(forKey: "ViewerView"), let view = ServerView(rawValue: name) {
                     sidebar.onShowView(view)

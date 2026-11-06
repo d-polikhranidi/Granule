@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var queryWindows: [QueryWindowController] = []
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        GinghamKey.register()
         NSApp.mainMenu = mainMenu()
     }
 

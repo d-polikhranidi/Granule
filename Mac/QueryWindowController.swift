@@ -30,6 +30,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     private let editor = SQLTextView()
     private let textOutput = NSTextView()
     private let planOutline = PlanOutline()
+    /// Over the result while a table's details show: its name and which detail.
+    private let detailsBar = NSStackView()
+    private let detailsTitle = NSTextField(labelWithString: "")
+    private let detailsPicker = NSSegmentedControl(labels: TableDetail.allCases.map(\.title), trackingMode: .selectOne, target: nil, action: nil)
+    private var detailsTable: Schema.Table?
     private var textScroll: NSScrollView!
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
@@ -92,7 +97,9 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         sidebar.onShowRows = { [weak self] table in self?.showRows(of: table) }
         sidebar.onShowCreate = { [weak self] table in self?.showCreate(of: table) }
         sidebar.onInsert = { [weak self] text in self?.insert(text) }
+        sidebar.onShowDetails = { [weak self] table in self?.showDetails(of: table, .overview) }
         sidebar.onShowView = { [weak self] view in
+            self?.hideDetails()
             self?.messageLabel.isHidden = true
             self?.queries.show(view)
             self?.startStatusTimer()
@@ -154,13 +161,23 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 view.topAnchor.constraint(equalTo: results.topAnchor), view.bottomAnchor.constraint(equalTo: results.bottomAnchor),
             ])
         }
-        let bottom = NSStackView(views: [messageLabel, results, statusLabel])
+        detailsTitle.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        detailsTitle.lineBreakMode = .byTruncatingMiddle
+        detailsTitle.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        detailsPicker.target = self
+        detailsPicker.action = #selector(pickDetail(_:))
+        detailsPicker.segmentStyle = .automatic
+        detailsBar.setViews([detailsTitle, detailsPicker], in: .leading)
+        detailsBar.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 2, right: 10)
+        detailsBar.isHidden = true
+        let bottom = NSStackView(views: [detailsBar, messageLabel, results, statusLabel])
         bottom.orientation = .vertical
         bottom.alignment = .leading
         bottom.spacing = 4
         bottom.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 6, right: 0)
         bottom.setCustomSpacing(6, after: results)
         results.widthAnchor.constraint(equalTo: bottom.widthAnchor).isActive = true
+        detailsBar.widthAnchor.constraint(equalTo: bottom.widthAnchor).isActive = true
         for label in [messageLabel, statusLabel] {
             label.translatesAutoresizingMaskIntoConstraints = false
             label.leadingAnchor.constraint(equalTo: bottom.leadingAnchor, constant: 10).isActive = true
@@ -246,6 +263,14 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                     editor.setSelectedRange(NSRange(location: cursor, length: 0))
                     checker.update(text: text, cursor: cursor)
                 }
+                // `-ViewerDetails <database.table>`: that table's details.
+                if let name = UserDefaults.standard.string(forKey: "ViewerDetails") {
+                    let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
+                    if parts.count == 2 {
+                        showDetails(of: Schema.Table(database: parts[0], name: parts[1], engine: "", rows: nil, bytes: nil, comment: ""),
+                                    TableDetail(rawValue: UserDefaults.standard.string(forKey: "ViewerDetail") ?? "") ?? .overview)
+                    }
+                }
                 // `-ViewerPlan <SQL>`: its plan shown (Explain Plan).
                 if let sql = UserDefaults.standard.string(forKey: "ViewerPlan") {
                     editor.string = sql
@@ -306,6 +331,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     }
 
     private func start(_ sql: String, values: [String: String]) {
+        hideDetails()
         messageLabel.isHidden = true
         queries.run(sql, parameters: values)
         startStatusTimer()
@@ -413,6 +439,27 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         let sql = Schema.previewStatement(of: table)
         replaceEditorText(sql)
         run(sql)
+    }
+
+    /// A table's details over the result: the detail chosen, run as a result of its own.
+    private func showDetails(of table: Schema.Table, _ detail: TableDetail) {
+        detailsTable = table
+        detailsTitle.stringValue = table.qualifiedName
+        detailsPicker.selectedSegment = TableDetail.allCases.firstIndex(of: detail) ?? 0
+        detailsBar.isHidden = false
+        messageLabel.isHidden = true
+        queries.run(detail.sql(database: table.database, table: table.name))
+        startStatusTimer()
+    }
+
+    @objc private func pickDetail(_ sender: NSSegmentedControl) {
+        guard let table = detailsTable, TableDetail.allCases.indices.contains(sender.selectedSegment) else { return }
+        showDetails(of: table, TableDetail.allCases[sender.selectedSegment])
+    }
+
+    private func hideDetails() {
+        detailsBar.isHidden = true
+        detailsTable = nil
     }
 
     private func showCreate(of table: Schema.Table) {

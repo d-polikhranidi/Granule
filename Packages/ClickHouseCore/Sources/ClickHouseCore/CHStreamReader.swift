@@ -32,10 +32,21 @@ final class CHStreamReader: @unchecked Sendable {
     /// Whether the response is in frames (`compress=1`).
     private let compressed: Bool
 
-    init(queryID: String, maxRows: Int?, compressed: Bool, continuation: AsyncThrowingStream<CHQueryEvent, Error>.Continuation) {
+    /// The bytes kept at most: the reading stops there (also when the
+    /// server's own limit can't be set, for a user with readonly = 1).
+    private let maxBytes: Int?
+    /// Whether JSON columns come as their text.
+    private let jsonAsText: Bool
+    /// Stopped at `maxBytes` (the request cancelled: not an error).
+    private var stoppedAtLimit = false
+
+    init(queryID: String, maxRows: Int?, maxBytes: Int?, compressed: Bool, jsonAsText: Bool,
+         continuation: AsyncThrowingStream<CHQueryEvent, Error>.Continuation) {
         self.queryID = queryID
         self.maxRows = maxRows
+        self.maxBytes = maxBytes
         self.compressed = compressed
+        self.jsonAsText = jsonAsText
         self.continuation = continuation
     }
 
@@ -54,7 +65,7 @@ final class CHStreamReader: @unchecked Sendable {
             return
         }
         data.withUnsafeBytes { (compressed ? frames : native).append($0) }
-        guard decodeError == nil else { return }
+        guard decodeError == nil, !stoppedAtLimit else { return }
         do {
             if compressed { try CHFrameReader.decompress(frames, into: native) }
             try readBlocks(final: false)
@@ -70,7 +81,7 @@ final class CHStreamReader: @unchecked Sendable {
 
     private func readBlocks(final: Bool) throws {
         while native.count > 0, final || native.count >= threshold {
-            var reader = CHNativeReader(native.unread)
+            var reader = CHNativeReader(native.unread, jsonAsText: jsonAsText)
             let block: CHBlock
             do {
                 block = try reader.readBlock()
@@ -84,11 +95,21 @@ final class CHStreamReader: @unchecked Sendable {
             try result.append(block)
             if block.rowCount > 0, firstRows == nil { firstRows = ContinuousClock.now - started }
             continuation.yield(.result(result))
+            if let maxBytes, result.byteCount >= maxBytes, !final {
+                stoppedAtLimit = true
+                onStop?()
+                return
+            }
         }
     }
 
     func complete(_ error: Error?) {
         defer { finished.value = true }
+        if stoppedAtLimit {
+            continuation.yield(.finished(stats(reachedLimit: true)))
+            continuation.finish()
+            return
+        }
         if let error {
             // Cancelled by the viewer: the iteration has ended already.
             continuation.finish(throwing: decodeError.map(Self.clientError) ?? error)
@@ -135,11 +156,14 @@ final class CHStreamReader: @unchecked Sendable {
             continuation.finish(throwing: CHClientError.truncated)
             return
         }
-        let stats = CHQueryStats(queryID: queryID, rows: result.rowCount, receivedBytes: receivedBytes, resultBytes: result.byteCount,
-                                 firstRows: firstRows, elapsed: ContinuousClock.now - started,
-                                 reachedLimit: maxRows.map { result.rowCount >= $0 } ?? false)
-        continuation.yield(.finished(stats))
+        let reached = maxRows.map { result.rowCount >= $0 } ?? false || maxBytes.map { result.byteCount >= $0 } ?? false
+        continuation.yield(.finished(stats(reachedLimit: reached)))
         continuation.finish()
+    }
+
+    private func stats(reachedLimit: Bool) -> CHQueryStats {
+        CHQueryStats(queryID: queryID, rows: result.rowCount, receivedBytes: receivedBytes, resultBytes: result.byteCount,
+                     firstRows: firstRows, elapsed: ContinuousClock.now - started, reachedLimit: reachedLimit)
     }
 
     /// An older server's error after the rows: its text, `Code: …`.

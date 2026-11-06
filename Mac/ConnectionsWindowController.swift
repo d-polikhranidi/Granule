@@ -1,5 +1,6 @@
 import AppKit
 import ClickHouseCore
+import ClickHouseSSH
 
 /// The servers the user added: a list, and the selected one's form (a URL
 /// pasted fills it in). Connect opens a window of queries on it.
@@ -23,6 +24,24 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
     private let certificateLabel = NSTextField(labelWithString: "")
     private let certificateButton = NSButton(title: String(localized: "Choose…"), target: nil, action: nil)
     private let certificateRemove = NSButton(title: String(localized: "Remove"), target: nil, action: nil)
+    private let sshBox = NSButton(checkboxWithTitle: String(localized: "Through an SSH server (a bastion)"), target: nil, action: nil)
+    private let sshHostField = NSTextField()
+    private let sshPortField = NSTextField()
+    private let sshUserField = NSTextField()
+    private let sshAuthPopUp = NSPopUpButton()
+    private let sshPasswordField = NSSecureTextField()
+    private let sshKeyLabel = NSTextField(labelWithString: "")
+    private let sshKeyButton = NSButton(title: String(localized: "Choose…"), target: nil, action: nil)
+    private let sshHostKeyLabel = NSTextField(labelWithString: "")
+    private let sshForgetButton = NSButton(title: String(localized: "Forget"), target: nil, action: nil)
+    /// The SSH rows of the form, shown when the box is on (the password's or the key's as chosen).
+    private var sshRows: [NSGridRow] = []
+    private var sshPasswordRow: NSGridRow!
+    private var sshKeyRow: NSGridRow!
+    private var sshHostKeyRow: NSGridRow!
+    private var fingerprintRow: NSGridRow!
+    /// A private key chosen and read, kept in the Keychain when the form is saved.
+    private var pendingKey: (name: String, text: String)?
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let connectButton = NSButton(title: String(localized: "Connect"), target: nil, action: nil)
     private let testButton = NSButton(title: String(localized: "Test"), target: nil, action: nil)
@@ -31,7 +50,7 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
 
     init(onConnect: @escaping (CHEndpoint) -> Void) {
         self.onConnect = onConnect
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 470), styleMask: [.titled, .closable, .miniaturizable, .resizable],
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 520), styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered, defer: false)
         window.title = String(localized: "Connections")
         window.minSize = NSSize(width: 640, height: 420)
@@ -45,6 +64,16 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         list.reloadData()
         list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         window.center()
+        #if DEBUG
+        // `-ViewerForm ssh`: the form's SSH rows shown (not saved), and the window's number.
+        if UserDefaults.standard.string(forKey: "ViewerForm") == "ssh" {
+            sshBox.state = .on
+            sshHostField.stringValue = "bastion.example.com"
+            sshAuthPopUp.selectItem(at: 1)
+            sshChanged(nil)
+            DispatchQueue.main.async { FileHandle.standardError.write(Data("VIEWER-WINDOW \(window.windowNumber)\n".utf8)) }
+        }
+        #endif
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -101,6 +130,23 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         certificateButton.action = #selector(chooseCertificate(_:))
         certificateRemove.target = self
         certificateRemove.action = #selector(removeCertificate(_:))
+        sshBox.target = self
+        sshBox.action = #selector(sshChanged(_:))
+        sshPortField.formatter = portField.formatter
+        sshPortField.placeholderString = "22"
+        sshHostField.placeholderString = String(localized: "bastion.example.com")
+        sshAuthPopUp.addItems(withTitles: [String(localized: "Password"), String(localized: "Private key (ed25519, ECDSA)")])
+        sshAuthPopUp.target = self
+        sshAuthPopUp.action = #selector(sshChanged(_:))
+        sshKeyLabel.textColor = .secondaryLabelColor
+        sshKeyLabel.lineBreakMode = .byTruncatingMiddle
+        sshKeyButton.target = self
+        sshKeyButton.action = #selector(chooseKey(_:))
+        sshHostKeyLabel.textColor = .secondaryLabelColor
+        sshHostKeyLabel.lineBreakMode = .byTruncatingMiddle
+        sshHostKeyLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        sshForgetButton.target = self
+        sshForgetButton.action = #selector(forgetHostKey(_:))
         statusLabel.textColor = .secondaryLabelColor
         connectButton.keyEquivalent = "\r"
         connectButton.target = self
@@ -117,6 +163,10 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         portField.widthAnchor.constraint(equalToConstant: 70).isActive = true
         hostField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         hostField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+        let sshHostRow = NSStackView(views: [sshHostField, label(String(localized: "Port:")), sshPortField])
+        sshPortField.widthAnchor.constraint(equalToConstant: 70).isActive = true
+        sshHostField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        sshHostField.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
         let grid = NSGridView(views: [
             [label(String(localized: "URL:")), urlField],
             [label(String(localized: "Name:")), nameField],
@@ -130,12 +180,25 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
             [label(String(localized: "Certificate:")), trustPopUp],
             [NSGridCell.emptyContentView, fingerprintField],
             [label(String(localized: "Client certificate:")), NSStackView(views: [certificateLabel, certificateButton, certificateRemove])],
+            [label(String(localized: "SSH:")), sshBox],
+            [label(String(localized: "SSH server:")), sshHostRow],
+            [label(String(localized: "SSH user:")), sshUserField],
+            [label(String(localized: "Sign in with:")), sshAuthPopUp],
+            [label(String(localized: "SSH password:")), sshPasswordField],
+            [label(String(localized: "Private key:")), NSStackView(views: [sshKeyLabel, sshKeyButton])],
+            [label(String(localized: "Server's key:")), NSStackView(views: [sshHostKeyLabel, sshForgetButton])],
         ])
+        fingerprintRow = grid.row(at: 10)
+        sshRows = (grid.numberOfRows - 6..<grid.numberOfRows).map { grid.row(at: $0) }
+        sshPasswordRow = grid.row(at: grid.numberOfRows - 3)
+        sshKeyRow = grid.row(at: grid.numberOfRows - 2)
+        sshHostKeyRow = grid.row(at: grid.numberOfRows - 1)
         grid.column(at: 0).xPlacement = .trailing
         grid.rowSpacing = 8
         grid.columnSpacing = 8
         grid.column(at: 1).width = 380
-        grid.setContentHuggingPriority(.required, for: .vertical)
+        // Below the fields' compression resistance (750): hugging must not squeeze them.
+        grid.setContentHuggingPriority(NSLayoutConstraint.Priority(700), for: .vertical)
         for index in 0..<grid.numberOfRows { grid.row(at: index).yPlacement = .center }
         let actions = NSStackView(views: [statusLabel, testButton, connectButton])
         statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
@@ -245,7 +308,86 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         }
         trustChanged(nil)
         showCertificate(endpoint.clientCertificate)
+        pendingKey = nil
+        sshBox.state = endpoint.ssh == nil ? .off : .on
+        sshHostField.stringValue = endpoint.ssh?.host ?? ""
+        sshPortField.integerValue = endpoint.ssh?.port ?? 22
+        sshUserField.stringValue = endpoint.ssh?.user ?? ""
+        sshAuthPopUp.selectItem(at: endpoint.ssh?.keyName == nil ? 0 : 1)
+        sshPasswordField.stringValue = endpoint.ssh?.keyName == nil ? Connections.shared.sshSecret(for: endpoint) : ""
+        showSSH(endpoint)
         statusLabel.stringValue = ""
+    }
+
+    /// The SSH rows as the form says: hidden when off, the password's or the key's.
+    private func showSSH(_ endpoint: CHEndpoint?) {
+        let on = sshBox.state == .on
+        sshRows.forEach { $0.isHidden = !on }
+        sshPasswordRow.isHidden = !on || sshAuthPopUp.indexOfSelectedItem != 0
+        sshKeyRow.isHidden = !on || sshAuthPopUp.indexOfSelectedItem != 1
+        let keyName = pendingKey?.name ?? endpoint?.ssh?.keyName
+        sshKeyLabel.stringValue = keyName.flatMap { $0.isEmpty ? nil : $0 } ?? String(localized: "None chosen")
+        let hostKey = endpoint?.ssh?.knownHostKey
+        sshHostKeyRow.isHidden = !on || hostKey == nil
+        sshHostKeyLabel.stringValue = hostKey.map(Self.shortKey) ?? ""
+        sshHostKeyLabel.toolTip = hostKey
+        fitWindow()
+    }
+
+    /// The window as tall as the form, at least (its rows come and go).
+    private func fitWindow() {
+        guard let window, let root = window.contentView?.subviews.first else { return }
+        root.layoutSubtreeIfNeeded()
+        let height = root.fittingSize.height
+        window.contentMinSize = NSSize(width: 640, height: height)
+        let content = window.contentRect(forFrameRect: window.frame)
+        guard content.height < height else { return }
+        var frame = window.frame
+        frame.origin.y -= height - content.height
+        frame.size.height += height - content.height
+        window.setFrame(frame, display: true, animate: window.isVisible)
+    }
+
+    /// A host key's type and the end of its base64, enough to tell keys apart.
+    static func shortKey(_ key: String) -> String {
+        let parts = key.split(separator: " ")
+        guard parts.count >= 2 else { return key }
+        return "\(parts[0]) …\(parts[1].suffix(16))"
+    }
+
+    @objc private func sshChanged(_ sender: Any?) {
+        if sshBox.state == .on, sshUserField.stringValue.isEmpty { sshUserField.stringValue = NSUserName() }
+        showSSH(edited)
+    }
+
+    /// An OpenSSH private key file, read and checked now.
+    @objc private func chooseKey(_ sender: Any?) {
+        guard let window else { return }
+        let panel = NSOpenPanel()
+        panel.message = String(localized: "A private key without a passphrase (ed25519 or ECDSA), such as ~/.ssh/id_ed25519")
+        panel.showsHiddenFiles = true
+        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".ssh")
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            do {
+                let text = try String(contentsOf: url, encoding: .utf8)
+                _ = try CHSSHKey.parse(text)
+                pendingKey = (url.lastPathComponent, text)
+                statusLabel.stringValue = ""
+            } catch {
+                statusLabel.stringValue = (error as? CHSSHKey.Failure)?.description ?? CHSSHKey.Failure.unreadable.description
+                statusLabel.textColor = .systemRed
+            }
+            showSSH(edited)
+        }
+    }
+
+    /// The bastion's key forgotten: the next connection takes the one it presents.
+    @objc private func forgetHostKey(_ sender: Any?) {
+        guard var endpoint = edited else { return }
+        endpoint.ssh?.knownHostKey = nil
+        Connections.shared.save(endpoint, password: passwordField.stringValue)
+        showSSH(endpoint)
     }
 
     private func showCertificate(_ name: String?) {
@@ -309,6 +451,20 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         case 2: endpoint.trust = authority.map(CHTrust.authority) ?? .system
         default: endpoint.trust = .system
         }
+        if sshBox.state == .on {
+            let host = sshHostField.stringValue.trimmingCharacters(in: .whitespaces)
+            let port = sshPortField.integerValue > 0 ? sshPortField.integerValue : 22
+            var bastion = selected?.ssh ?? CHSSHBastion(host: host, port: port, user: "")
+            // Another bastion: its key is yet to be seen.
+            if bastion.host != host || bastion.port != port { bastion.knownHostKey = nil }
+            bastion.host = host
+            bastion.port = port
+            bastion.user = sshUserField.stringValue.trimmingCharacters(in: .whitespaces)
+            bastion.keyName = sshAuthPopUp.indexOfSelectedItem == 1 ? (pendingKey?.name ?? selected?.ssh?.keyName ?? "") : nil
+            endpoint.ssh = bastion
+        } else {
+            endpoint.ssh = nil
+        }
         return endpoint
     }
 
@@ -317,6 +473,15 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         guard let endpoint = edited else { return nil }
         let row = list.selectedRow
         Connections.shared.save(endpoint, password: passwordField.stringValue)
+        // The bastion's secret: none without one, its password, or the key chosen.
+        if endpoint.ssh == nil {
+            Connections.setSSHSecret("", for: endpoint.id)
+        } else if endpoint.ssh?.keyName == nil {
+            Connections.setSSHSecret(sshPasswordField.stringValue, for: endpoint.id)
+        } else if let pendingKey {
+            Connections.setSSHSecret(pendingKey.text, for: endpoint.id)
+        }
+        pendingKey = nil
         list.reloadData(forRowIndexes: IndexSet(integer: row), columnIndexes: IndexSet(integer: 0))
         return endpoint
     }
@@ -344,8 +509,9 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
 
     @objc private func trustChanged(_ sender: Any?) {
         let index = trustPopUp.indexOfSelectedItem
-        fingerprintField.isHidden = index == 0
+        fingerprintRow.isHidden = index == 0
         fingerprintField.isEditable = index == 1
+        fitWindow()
         guard index == 2, sender != nil else { return }
         let panel = NSOpenPanel()
         panel.message = String(localized: "The certificate of the authority that issued the server's (PEM or DER)")
@@ -372,11 +538,15 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         let client = CHClient(endpoint: endpoint, password: passwordField.stringValue, identity: Connections.shared.clientIdentity(for: endpoint))
         Task {
             do {
+                if endpoint.ssh != nil { statusLabel.stringValue = String(localized: "Connecting to the SSH server…") }
+                try await Connections.shared.route(client, for: endpoint)
+                showSSH(selected)
                 let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 15)
                 statusLabel.stringValue = String(localized: "Connected: ClickHouse \(info.version.text), \(info.user), \(info.timeZone)")
             } catch {
                 statusLabel.stringValue = error.viewerDescription
                 statusLabel.textColor = .systemRed
+                showSSH(selected)
             }
         }
     }

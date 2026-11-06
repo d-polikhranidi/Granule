@@ -23,6 +23,8 @@ public struct CHEndpoint: Codable, Sendable, Hashable, Identifiable {
     /// The client certificate's name, when the server asks for one (the
     /// certificate itself is in the Keychain).
     public var clientCertificate: String?
+    /// The SSH server the server is reached through, when it's behind one.
+    public var ssh: CHSSHBastion?
 
     public init(id: UUID = UUID(), name: String = "", host: String = "localhost", port: Int = 8123, isSecure: Bool = false,
                 user: String = "default", database: String = "", isReadOnly: Bool = false, trust: CHTrust = .system,
@@ -55,7 +57,8 @@ public struct CHEndpoint: Codable, Sendable, Hashable, Identifiable {
         switch compression {
         case .lz4: return true
         case .none: return false
-        case .automatic: return !Self.isLocal(host)
+        // Through a bastion, the way is the bastion's (the server's own name is as it sees it).
+        case .automatic: return !Self.isLocal(ssh?.host ?? host)
         }
     }
 
@@ -74,7 +77,7 @@ public struct CHEndpoint: Codable, Sendable, Hashable, Identifiable {
         }
     }
 
-    /// The server's HTTP interface.
+    /// The server's HTTP interface (through a bastion: as the bastion reaches it).
     public var url: URL? {
         var components = URLComponents()
         components.scheme = isSecure ? "https" : "http"
@@ -179,6 +182,27 @@ public enum CHCompression: String, Codable, Sendable, Hashable, CaseIterable {
     /// ClickHouse's LZ4 frames (`compress=1`).
     case lz4
     case none
+}
+
+/// An SSH server ("bastion", "jump host") a ClickHouse server is reached
+/// through: its own address is the one the bastion reaches. The password or
+/// the private key is in the Keychain.
+public struct CHSSHBastion: Codable, Sendable, Hashable {
+    public var host: String
+    public var port: Int
+    public var user: String
+    /// The private key's file name when signing in with a key (`nil`: a password).
+    public var keyName: String?
+    /// The bastion's host key, kept the first time it's reached (`ssh-ed25519 AAAA…`).
+    public var knownHostKey: String?
+
+    public init(host: String, port: Int = 22, user: String, keyName: String? = nil, knownHostKey: String? = nil) {
+        self.host = host
+        self.port = port
+        self.user = user
+        self.keyName = keyName
+        self.knownHostKey = knownHostKey
+    }
 }
 
 /// How a server's certificate is trusted over HTTPS.

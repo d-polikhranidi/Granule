@@ -275,8 +275,14 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             : String(localized: "Connecting…")
         Task {
             do {
+                if let bastion = endpoint.ssh {
+                    statusLabel.stringValue = String(localized: "Connecting to the SSH server \(bastion.host)…")
+                    try await Connections.shared.route(client, for: endpoint)
+                    statusLabel.stringValue = String(localized: "Connecting…")
+                }
                 let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)
-                window?.subtitle = "\(endpoint.host) · ClickHouse \(info.version.text) · \(info.user)"
+                let via = endpoint.ssh.map { String(localized: " via \($0.host)") } ?? ""
+                window?.subtitle = "\(endpoint.host)\(via) · ClickHouse \(info.version.text) · \(info.user)"
                 statusLabel.stringValue = String(localized: "Connected to ClickHouse \(info.version.text) (\(info.timeZone)).")
                 sidebar.reload()
                 window?.makeFirstResponder(editor)

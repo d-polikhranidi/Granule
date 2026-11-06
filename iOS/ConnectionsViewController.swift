@@ -73,6 +73,16 @@ final class ConnectionsViewController: UICollectionViewController {
         open(endpoint, password: Connections.shared.password(for: endpoint))
     }
 
+    #if DEBUG
+    /// `-ViewerForm ssh`: a new connection's form with a bastion (not saved).
+    func showSSHFormForTesting() {
+        var endpoint = CHEndpoint(name: "")
+        endpoint.ssh = CHSSHBastion(host: "bastion.example.com", user: "viewer", keyName: "id_ed25519",
+                                    knownHostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl")
+        present(UINavigationController(rootViewController: ConnectionFormViewController(endpoint: endpoint, isNew: true)), animated: false)
+    }
+    #endif
+
     private func edit(_ endpoint: CHEndpoint?) {
         let form = ConnectionFormViewController(endpoint: endpoint ?? CHEndpoint(name: ""), isNew: endpoint == nil)
         present(UINavigationController(rootViewController: form), animated: true)

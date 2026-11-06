@@ -1,4 +1,5 @@
 import ClickHouseCore
+import ClickHouseSSH
 import Foundation
 import Gingham
 #if os(iOS)
@@ -485,6 +486,8 @@ extension Error {
             return String(localized: "The server answered \(status), not as ClickHouse: \(text)")
         case CHClientError.malformed(let what): return String(localized: "The result can't be read (\(what)).")
         case CHClientError.badURL: return String(localized: "The server's address isn't valid.")
+        case let error as CHSSHTunnel.Failure: return error.description
+        case let error as CHSSHKey.Failure: return error.description
         default: return localizedDescription
         }
     }

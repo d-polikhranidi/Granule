@@ -231,6 +231,7 @@ final class CHQueryDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendab
 final class CHDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let trust: CHTrust
     private let identity: CHClientIdentity?
+    private let hostname: String?
     private let handle: FileHandle
     private let progress: @Sendable (Int) -> Void
     private let continuation: CheckedContinuation<Int, Error>
@@ -241,10 +242,11 @@ final class CHDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sen
     private var written = 0
     private var failure: Error?
 
-    init(trust: CHTrust, identity: CHClientIdentity?, handle: FileHandle, progress: @escaping @Sendable (Int) -> Void,
+    init(trust: CHTrust, identity: CHClientIdentity?, hostname: String?, handle: FileHandle, progress: @escaping @Sendable (Int) -> Void,
          continuation: CheckedContinuation<Int, Error>) {
         self.trust = trust
         self.identity = identity
+        self.hostname = hostname
         self.handle = handle
         self.progress = progress
         self.continuation = continuation
@@ -291,7 +293,7 @@ final class CHDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sen
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        let (disposition, credential) = CHAuthentication.answer(challenge, trust: trust, identity: identity, hostname: nil)
+        let (disposition, credential) = CHAuthentication.answer(challenge, trust: trust, identity: identity, hostname: hostname)
         completionHandler(disposition, credential)
     }
 }

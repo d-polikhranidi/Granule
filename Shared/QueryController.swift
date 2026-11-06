@@ -301,9 +301,14 @@ final class QueryController {
     /// titles, values and sums (1,000 rows all over the result), up to `widest`.
     private func finish() {
         table.sortsRows = true
-        for column in table.tableColumns {
-            guard let fitted = table.fittingWidth(ofColumnID: column.id, measuringRows: 1_000) else { continue }
-            table.setWidth(min(max(fitted, 48), Self.widest), forColumnID: column.id)
+        // Fitted once the table has laid the rows out (a small result comes and ends in one go).
+        let source = source
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.source === source else { return }
+            for column in table.tableColumns {
+                guard let fitted = table.fittingWidth(ofColumnID: column.id, measuringRows: 1_000) else { continue }
+                table.setWidth(min(max(fitted, 48), Self.widest), forColumnID: column.id)
+            }
         }
         onChange()
     }

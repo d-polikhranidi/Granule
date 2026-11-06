@@ -9,6 +9,7 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
     var onShowCreate: (Schema.Table) -> Void = { _ in }
     var onInsert: (String) -> Void = { _ in }
     var onShowView: (ServerView) -> Void = { _ in }
+    var onShowDetails: (Schema.Table) -> Void = { _ in }
 
     /// A row of the outline (unique ids: the same column name in two tables are two rows).
     nonisolated struct Node: Hashable, Sendable {
@@ -197,6 +198,7 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
             case .table(let table):
                 return UIMenu(children: [
                     UIAction(title: String(localized: "Show Rows"), image: UIImage(systemName: "tablecells")) { _ in self.onShowRows(table) },
+                    UIAction(title: String(localized: "Show Details"), image: UIImage(systemName: "info.circle")) { _ in self.onShowDetails(table) },
                     UIAction(title: String(localized: "Show CREATE Statement"), image: UIImage(systemName: "doc.plaintext")) { _ in self.onShowCreate(table) },
                     UIAction(title: String(localized: "Insert Name"), image: UIImage(systemName: "text.insert")) { _ in self.onInsert(table.qualifiedName) },
                     UIAction(title: String(localized: "Copy Name"), image: UIImage(systemName: "doc.on.doc")) { _ in UIPasteboard.general.string = table.qualifiedName },

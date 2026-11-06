@@ -14,6 +14,8 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
     var onInsert: (String) -> Void = { _ in }
     /// A view of the server to show.
     var onShowView: (ServerView) -> Void = { _ in }
+    /// A table's details to show (engine and keys, columns, partitions, …).
+    var onShowDetails: (Schema.Table) -> Void = { _ in }
 
     private let outline = NSOutlineView()
     private let filterField = NSSearchField()
@@ -286,6 +288,7 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
             add(String(localized: "Copy Name")) { Self.copy(database.name) }
         case .table(let table):
             add(String(localized: "Show Rows")) { [weak self] in self?.onShowRows(table) }
+            add(String(localized: "Show Details")) { [weak self] in self?.onShowDetails(table) }
             add(String(localized: "Show CREATE Statement")) { [weak self] in self?.onShowCreate(table) }
             menu.addItem(.separator())
             add(String(localized: "Insert Name")) { [weak self] in self?.onInsert(table.qualifiedName) }

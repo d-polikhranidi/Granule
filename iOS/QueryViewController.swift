@@ -32,6 +32,10 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     private let checkLabel = UILabel()
     private let checkIcon = UIImageView()
     private var underlined: [EditorProblem] = []
+    /// Over the result while a table's details show: its name and a menu of its details.
+    private let detailsBar = UIStackView()
+    private let detailsButton = UIButton(configuration: .gray())
+    private var detailsTable: Schema.Table?
 
     init(endpoint: CHEndpoint, client: CHClient) {
         self.endpoint = endpoint
@@ -125,7 +129,14 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             guard let self else { return nil }
             return queries.currentDatabase ?? (endpoint.database.isEmpty ? nil : endpoint.database)
         }
-        let stack = UIStackView(arrangedSubviews: [editor, checkBar, messageLabel, results, statusLabel])
+        detailsButton.showsMenuAsPrimaryAction = true
+        detailsButton.changesSelectionAsPrimaryAction = false
+        detailsBar.addArrangedSubview(detailsButton)
+        detailsBar.addArrangedSubview(UIView())
+        detailsBar.isLayoutMarginsRelativeArrangement = true
+        detailsBar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 2, trailing: 12)
+        detailsBar.isHidden = true
+        let stack = UIStackView(arrangedSubviews: [editor, checkBar, detailsBar, messageLabel, results, statusLabel])
         stack.axis = .vertical
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -164,6 +175,11 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                     self?.completions = completions
                     #if DEBUG
                     // `-ViewerComplete <text>`: the text typed, the editor focused (its completions in the bar).
+                    if let self, let name = UserDefaults.standard.string(forKey: "ViewerDetails"), name.contains(".") {
+                        let parts = name.split(separator: ".", maxSplits: 1).map(String.init)
+                        self.showDetails(of: Schema.Table(database: parts[0], name: parts[1], engine: "", rows: nil, bytes: nil, comment: ""),
+                                         TableDetail(rawValue: UserDefaults.standard.string(forKey: "ViewerDetail") ?? "") ?? .overview)
+                    }
                     if let self, let sql = UserDefaults.standard.string(forKey: "ViewerPlan") {
                         self.editor.text = sql
                         self.showPlan(of: sql)
@@ -275,6 +291,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     }
 
     private func start(_ sql: String, values: [String: String]) {
+        detailsBar.isHidden = true
+        detailsTable = nil
         messageLabel.isHidden = true
         queries.run(sql, parameters: values)
         statusTimer?.invalidate()
@@ -293,8 +311,31 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     /// A view of the server (Running Queries, Merges, …), refreshed while live.
     func show(_ view: ServerView) {
+        detailsBar.isHidden = true
         messageLabel.isHidden = true
         queries.show(view)
+        statusTimer?.invalidate()
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateStatus() }
+        }
+        showSecondary()
+    }
+
+    /// A table's details over the result, the detail chosen in the bar's menu.
+    func showDetails(of table: Schema.Table, _ detail: TableDetail) {
+        detailsTable = table
+        var configuration = detailsButton.configuration ?? .gray()
+        configuration.title = "\(table.qualifiedName) · \(detail.title)"
+        configuration.image = UIImage(systemName: "chevron.up.chevron.down")
+        configuration.imagePlacement = .trailing
+        configuration.imagePadding = 6
+        detailsButton.configuration = configuration
+        detailsButton.menu = UIMenu(children: TableDetail.allCases.map { other in
+            UIAction(title: other.title, state: other == detail ? .on : .off) { [weak self] _ in self?.showDetails(of: table, other) }
+        })
+        detailsBar.isHidden = false
+        messageLabel.isHidden = true
+        queries.run(detail.sql(database: table.database, table: table.name))
         statusTimer?.invalidate()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }

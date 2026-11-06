@@ -39,8 +39,9 @@ enum SQLHighlighting {
         }
     }
 
-    /// Colors the whole text (a few milliseconds for a long script).
-    static func apply(to storage: NSTextStorage) {
+    /// Colors the whole text (a few milliseconds for a long script), and
+    /// underlines the problems found in it.
+    static func apply(to storage: NSTextStorage, problems: [EditorProblem] = []) {
         let text = storage.string
         let whole = NSRange(location: 0, length: storage.length)
         storage.beginEditing()
@@ -48,6 +49,12 @@ enum SQLHighlighting {
         for token in CHSQL.tokens(text) {
             guard let color = color(token.kind), NSMaxRange(token.range) <= storage.length else { continue }
             storage.addAttribute(.foregroundColor, value: color, range: token.range)
+        }
+        for problem in problems {
+            guard var range = problem.range, range.location < storage.length else { continue }
+            range.length = max(1, min(range.length, storage.length - range.location))
+            storage.addAttributes([.underlineStyle: NSUnderlineStyle.thick.rawValue | NSUnderlineStyle.patternDot.rawValue,
+                                   .underlineColor: problem.isError ? PlatformColor.systemRed : PlatformColor.systemOrange], range: range)
         }
         storage.endEditing()
     }

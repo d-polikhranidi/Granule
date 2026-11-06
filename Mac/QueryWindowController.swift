@@ -17,6 +17,13 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     /// Which of the server's tabs it is (its editor's text is kept by it).
     var tabNumber = 0
     private var completions: Completions?
+    private lazy var checker = StatementChecker(client: client, isAutomatic: !endpoint.isCloud)
+    /// Under the editor: the problem at the cursor, with the names the server suggests.
+    private let checkBar = NSStackView()
+    private let checkLabel = NSTextField(labelWithString: "")
+    private let checkIcon = NSImageView()
+    /// The problems underlined now (the text is colored again only when they change).
+    private var underlined: [EditorProblem] = []
 
     private let table = GHTableView(frame: .zero)
     private let sidebar = SchemaSidebar()
@@ -160,14 +167,32 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         messageLabel.setContentHuggingPriority(.required, for: .vertical)
         results.setContentHuggingPriority(.defaultLow, for: .vertical)
 
+        // The editor and, under it, its check's bar.
+        checkLabel.lineBreakMode = .byTruncatingTail
+        checkLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        checkLabel.isSelectable = true
+        checkLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        checkIcon.setContentHuggingPriority(.required, for: .horizontal)
+        checkBar.addArrangedSubview(checkIcon)
+        checkBar.addArrangedSubview(checkLabel)
+        checkBar.edgeInsets = NSEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
+        checkBar.spacing = 6
+        checkBar.isHidden = true
+        let editorPane = NSStackView(views: [editorScroll, checkBar])
+        editorPane.orientation = .vertical
+        editorPane.spacing = 0
+        editorScroll.widthAnchor.constraint(equalTo: editorPane.widthAnchor).isActive = true
+        checkBar.widthAnchor.constraint(equalTo: editorPane.widthAnchor).isActive = true
+        checker.onChange = { [weak self] in self?.showProblems() }
+
         let split = NSSplitView()
         split.isVertical = false
         split.dividerStyle = .thin
-        split.addArrangedSubview(editorScroll)
+        split.addArrangedSubview(editorPane)
         split.addArrangedSubview(bottom)
         split.setHoldingPriority(.defaultLow - 1, forSubviewAt: 1)
         split.autosaveName = "EditorSplit \(endpoint.id.uuidString)"
-        editorScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 60).isActive = true
+        editorPane.heightAnchor.constraint(greaterThanOrEqualToConstant: 60).isActive = true
         // The editor a few lines high at first (then as the user leaves it).
         DispatchQueue.main.async { [weak split] in
             guard let split, split.arrangedSubviews.count == 2 else { return }
@@ -203,6 +228,18 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                     #endif
                 }
                 #if DEBUG
+                // `-ViewerText <text>`: the editor's text (checked as if typed).
+                // (A "‸" in it: the cursor's place.)
+                if var text = UserDefaults.standard.string(forKey: "ViewerText") {
+                    var cursor = (text as NSString).length
+                    if let mark = text.range(of: "‸") {
+                        cursor = text.utf16.distance(from: text.startIndex, to: mark.lowerBound)
+                        text.removeSubrange(mark)
+                    }
+                    editor.string = text
+                    editor.setSelectedRange(NSRange(location: cursor, length: 0))
+                    checker.update(text: text, cursor: cursor)
+                }
                 // `-ViewerView <name>`: a server view shown (processes, merges, …).
                 if let name = UserDefaults.standard.string(forKey: "ViewerView"), let view = ServerView(rawValue: name) {
                     sidebar.onShowView(view)
@@ -414,9 +451,69 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         DispatchQueue.main.async { [weak self] in
             guard let self, let storage = editor.textStorage else { return }
             highlightPending = false
-            SQLHighlighting.apply(to: storage)
+            underlined = checker.problems
+            SQLHighlighting.apply(to: storage, problems: underlined)
             loadStatementColumns()
+            checker.update(text: editor.string, cursor: editor.selectedRange().location)
         }
+    }
+
+    func textViewDidChangeSelection(_ notification: Notification) {
+        checker.update(text: editor.string, cursor: editor.selectedRange().location)
+        showProblems()
+    }
+
+    /// Query > Check Statement (⌘B): the server's verdict on the statement at
+    /// the cursor now (on ClickHouse Cloud the only way: no checks while typing).
+    @objc func checkStatement(_ sender: Any?) {
+        checker.checkNow(text: editor.string, cursor: editor.selectedRange().location)
+    }
+
+    /// The problems underlined, the one at the cursor in the bar with its suggestions.
+    private func showProblems() {
+        guard let storage = editor.textStorage, storage.string == editor.string else { return }
+        if underlined != checker.problems {
+            underlined = checker.problems
+            let selection = editor.selectedRanges
+            SQLHighlighting.apply(to: storage, problems: underlined)
+            editor.selectedRanges = selection
+        }
+        while checkBar.arrangedSubviews.count > 2 { checkBar.arrangedSubviews.last?.removeFromSuperview() }
+        guard let problem = checker.problem(at: editor.selectedRange().location) else {
+            checkBar.isHidden = !checker.isChecking
+            checkIcon.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
+            checkIcon.contentTintColor = .secondaryLabelColor
+            checkLabel.stringValue = String(localized: "Checking…")
+            checkLabel.textColor = .secondaryLabelColor
+            return
+        }
+        checkBar.isHidden = false
+        checkIcon.image = NSImage(systemSymbolName: problem.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill", accessibilityDescription: nil)
+        checkIcon.contentTintColor = problem.isError ? .systemRed : .systemOrange
+        let others = checker.problems.count - 1
+        checkLabel.stringValue = problem.message + (others > 0 ? "  " + String(localized: "(\(others) more)") : "")
+        checkLabel.textColor = .labelColor
+        checkLabel.toolTip = problem.message
+        for suggestion in problem.suggestions.prefix(3) {
+            guard let range = problem.range else { break }
+            let button = NSButton(title: suggestion, target: nil, action: nil)
+            button.bezelStyle = .push
+            button.controlSize = .small
+            button.toolTip = String(localized: "Replace with \(suggestion)")
+            let fix = MenuAction(suggestion) { [weak self] in self?.replace(range, with: suggestion) }
+            button.target = fix
+            button.action = #selector(MenuAction.perform(_:))
+            objc_setAssociatedObject(button, &MenuAction.key, fix, .OBJC_ASSOCIATION_RETAIN)
+            checkBar.addArrangedSubview(button)
+        }
+    }
+
+    /// A name the server suggested put in place of the wrong one.
+    private func replace(_ range: NSRange, with text: String) {
+        guard NSMaxRange(range) <= (editor.string as NSString).length, editor.shouldChangeText(in: range, replacementString: text) else { return }
+        editor.replaceCharacters(in: range, with: text)
+        editor.didChangeText()
+        window?.makeFirstResponder(editor)
     }
 
     /// The columns of the tables the statement at the cursor reads, for completion.
@@ -668,6 +765,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         case #selector(stopQuery(_:)): queries.isRunning
         case #selector(exportResult(_:)): queries.statement != nil
         case #selector(showValue(_:)): queries.source != nil
+        case #selector(checkStatement(_:)): client.serverInfo != nil
         default: true
         }
     }
@@ -710,7 +808,11 @@ final class MenuAction: NSObject {
         item.representedObject = self
     }
 
+    nonisolated(unsafe) static var key = 0
+
     @objc private func run(_ sender: Any?) { body() }
+
+    @objc func perform(_ sender: Any?) { body() }
 }
 
 /// The editor: SQL as typed, no smart quotes or substitutions.

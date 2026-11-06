@@ -26,6 +26,12 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     private var historySaved = Set<String>()
     private var completions: Completions?
     private let completionBar = CompletionBar()
+    private lazy var checker = StatementChecker(client: client, isAutomatic: !endpoint.isCloud)
+    /// Under the editor: the problem at the cursor, with the names the server suggests.
+    private let checkBar = UIStackView()
+    private let checkLabel = UILabel()
+    private let checkIcon = UIImageView()
+    private var underlined: [EditorProblem] = []
 
     init(endpoint: CHEndpoint, client: CHClient) {
         self.endpoint = endpoint
@@ -101,7 +107,21 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                 content.topAnchor.constraint(equalTo: results.topAnchor), content.bottomAnchor.constraint(equalTo: results.bottomAnchor),
             ])
         }
-        let stack = UIStackView(arrangedSubviews: [editor, messageLabel, results, statusLabel])
+        checkLabel.font = .preferredFont(forTextStyle: .footnote)
+        checkLabel.numberOfLines = 2
+        checkLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        checkIcon.setContentHuggingPriority(.required, for: .horizontal)
+        checkIcon.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .footnote)
+        checkBar.addArrangedSubview(checkIcon)
+        checkBar.addArrangedSubview(checkLabel)
+        checkBar.spacing = 6
+        checkBar.alignment = .center
+        checkBar.isLayoutMarginsRelativeArrangement = true
+        checkBar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 4, leading: 12, bottom: 4, trailing: 12)
+        checkBar.backgroundColor = .secondarySystemBackground
+        checkBar.isHidden = true
+        checker.onChange = { [weak self] in self?.showProblems() }
+        let stack = UIStackView(arrangedSubviews: [editor, checkBar, messageLabel, results, statusLabel])
         stack.axis = .vertical
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -140,6 +160,10 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                     self?.completions = completions
                     #if DEBUG
                     // `-ViewerComplete <text>`: the text typed, the editor focused (its completions in the bar).
+                    if let self, let text = UserDefaults.standard.string(forKey: "ViewerText") {
+                        self.editor.text = text
+                        self.textViewDidChange(self.editor)
+                    }
                     if let self, let text = UserDefaults.standard.string(forKey: "ViewerComplete") {
                         self.editor.text = text
                         SQLHighlighting.apply(to: self.editor.textStorage)
@@ -175,11 +199,13 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     override var keyCommands: [UIKeyCommand]? {
         [UIKeyCommand(title: String(localized: "Run Statement"), action: #selector(runCommand(_:)), input: "\r", modifierFlags: .command),
          UIKeyCommand(title: String(localized: "Stop"), action: #selector(stopCommand(_:)), input: ".", modifierFlags: .command),
+         UIKeyCommand(title: String(localized: "Check Statement"), action: #selector(checkCommand(_:)), input: "b", modifierFlags: .command),
          UIKeyCommand(title: String(localized: "Find in Result"), action: #selector(findCommand(_:)), input: "f", modifierFlags: .command)]
     }
 
     @objc private func runCommand(_ sender: Any?) { runStatement() }
     @objc private func stopCommand(_ sender: Any?) { queries.cancel() }
+    @objc private func checkCommand(_ sender: Any?) { checker.checkNow(text: editor.text, cursor: editor.selectedRange.location) }
     @objc private func findCommand(_ sender: Any?) { navigationItem.searchController?.searchBar.becomeFirstResponder() }
 
     // MARK: Running
@@ -303,13 +329,58 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     func textViewDidChange(_ textView: UITextView) {
         let selection = textView.selectedRange
-        SQLHighlighting.apply(to: textView.textStorage)
+        underlined = checker.problems
+        SQLHighlighting.apply(to: textView.textStorage, problems: underlined)
         textView.selectedRange = selection
         updateCompletions()
+        checker.update(text: textView.text, cursor: textView.selectedRange.location)
     }
 
     func textViewDidChangeSelection(_ textView: UITextView) {
         updateCompletions()
+        checker.update(text: textView.text, cursor: textView.selectedRange.location)
+        showProblems()
+    }
+
+    // MARK: Checking
+
+    /// The problems underlined, the one at the cursor under the editor with the names suggested.
+    private func showProblems() {
+        guard editor.textStorage.string == editor.text else { return }
+        if underlined != checker.problems {
+            underlined = checker.problems
+            let selection = editor.selectedRange
+            SQLHighlighting.apply(to: editor.textStorage, problems: underlined)
+            editor.selectedRange = selection
+        }
+        while checkBar.arrangedSubviews.count > 2 { checkBar.arrangedSubviews.last?.removeFromSuperview() }
+        let problem = checker.problem(at: editor.selectedRange.location)
+        let hidden = problem == nil
+        if checkBar.isHidden != hidden { checkBar.isHidden = hidden }
+        guard let problem else { return }
+        checkIcon.image = UIImage(systemName: problem.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+        checkIcon.tintColor = problem.isError ? .systemRed : .systemOrange
+        let others = checker.problems.count - 1
+        checkLabel.text = problem.message + (others > 0 ? "  " + String(localized: "(\(others) more)") : "")
+        for suggestion in problem.suggestions.prefix(2) {
+            guard let range = problem.range else { break }
+            var configuration = UIButton.Configuration.gray()
+            configuration.title = suggestion
+            configuration.cornerStyle = .capsule
+            configuration.buttonSize = .small
+            let button = UIButton(configuration: configuration, primaryAction: UIAction { [weak self] _ in self?.replace(range, with: suggestion) })
+            button.setContentHuggingPriority(.required, for: .horizontal)
+            button.setContentCompressionResistancePriority(.required, for: .horizontal)
+            checkBar.addArrangedSubview(button)
+        }
+    }
+
+    /// A name the server suggested put in place of the wrong one.
+    private func replace(_ range: NSRange, with text: String) {
+        guard NSMaxRange(range) <= (editor.text as NSString).length,
+              let start = editor.position(from: editor.beginningOfDocument, offset: range.location),
+              let end = editor.position(from: start, offset: range.length), let textRange = editor.textRange(from: start, to: end) else { return }
+        editor.replace(textRange, withText: text)
     }
 
     // MARK: Completion
@@ -380,7 +451,11 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             UIAction(title: String(localized: "Larger Editor"), image: UIImage(systemName: "arrow.down.to.line")) { [weak self] _ in self?.resizeEditor(by: 120) },
             UIAction(title: String(localized: "Smaller Editor"), image: UIImage(systemName: "arrow.up.to.line")) { [weak self] _ in self?.resizeEditor(by: -120) },
         ])
-        return [historyMenu, explain, export, editorSize]
+        let check = UIAction(title: String(localized: "Check Statement"), image: UIImage(systemName: "checkmark.seal")) { [weak self] _ in
+            guard let self else { return }
+            checker.checkNow(text: editor.text, cursor: editor.selectedRange.location)
+        }
+        return [historyMenu, check, explain, export, editorSize]
     }
 
     private func resizeEditor(by delta: CGFloat) {

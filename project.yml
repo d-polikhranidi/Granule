@@ -37,6 +37,7 @@ targets:
       - package: Gingham
         product: Gingham
       - package: ClickHouseCore
+        products: [ClickHouseCore, ClickHouseSSH]
     info:
       path: Mac/Info.plist
       properties:
@@ -56,6 +57,8 @@ targets:
       properties:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
+        # An SSH tunnel's local port (127.0.0.1 only), for servers behind a bastion.
+        com.apple.security.network.server: true
         # Export writes where the user picks.
         com.apple.security.files.user-selected.read-write: true
     settings:
@@ -80,6 +83,7 @@ targets:
       - package: Gingham
         product: Gingham
       - package: ClickHouseCore
+        products: [ClickHouseCore, ClickHouseSSH]
     info:
       path: iOS/Info.plist
       properties:

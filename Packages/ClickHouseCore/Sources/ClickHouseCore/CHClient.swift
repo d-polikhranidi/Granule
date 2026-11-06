@@ -77,11 +77,18 @@ public final class CHClient: Sendable {
     /// The client certificate given to servers that ask for one.
     let identity: CHClientIdentity?
 
+    /// The local port of a tunnel the server is reached through (`nil`: directly).
+    private let tunnelPort = CHLocked<Int?>(nil)
+    /// The tunnel itself, kept open while the client lives.
+    private let tunnel = CHLocked<AnyObject?>(nil)
+
     public init(endpoint: CHEndpoint, password: String, identity: CHClientIdentity? = nil) {
         self.endpoint = endpoint
         self.password = password
         self.identity = identity
-        sessionDelegate = CHTrustDelegate(trust: endpoint.trust, identity: identity, hostname: nil)
+        let tunnelPort = tunnelPort
+        let host = endpoint.host
+        sessionDelegate = CHTrustDelegate(trust: endpoint.trust, identity: identity, hostname: { tunnelPort.value == nil ? nil : host })
         session = URLSession(configuration: Self.configuration(timeout: 60), delegate: sessionDelegate, delegateQueue: nil)
     }
 
@@ -98,6 +105,27 @@ public final class CHClient: Sendable {
         return configuration
     }
 
+    /// Reaches the server through a tunnel's local port from now on (`nil`: directly),
+    /// keeping `tunnel` while the client lives. TLS still checks the server's own name.
+    public func route(throughLocalPort port: Int?, keeping tunnel: AnyObject? = nil) {
+        tunnelPort.value = port
+        self.tunnel.value = tunnel
+    }
+
+    /// The server's HTTP interface as this client reaches it: directly, or a tunnel's local port.
+    var baseURL: URL? {
+        guard let port = tunnelPort.value else { return endpoint.url }
+        var components = URLComponents()
+        components.scheme = endpoint.isSecure ? "https" : "http"
+        components.host = "127.0.0.1"
+        components.port = port
+        components.path = "/"
+        return components.url
+    }
+
+    /// The name TLS checks the server's certificate for, when it isn't the URL's (a tunnel).
+    var tlsHostname: String? { tunnelPort.value == nil ? nil : endpoint.host }
+
     /// The server's info, once connected.
     public var serverInfo: CHServerInfo? { state.value }
 
@@ -107,7 +135,7 @@ public final class CHClient: Sendable {
     /// service to wake), then learns its version, zone and the user's limits.
     @discardableResult
     public func connect(timeout: TimeInterval = 120) async throws -> CHServerInfo {
-        guard let base = endpoint.url else { throw CHClientError.badURL }
+        guard let base = baseURL else { throw CHClientError.badURL }
         var ping = URLRequest(url: base.appending(path: "ping"))
         ping.timeoutInterval = timeout
         let (data, response) = try await session.data(for: ping)
@@ -130,7 +158,7 @@ public final class CHClient: Sendable {
     /// The request of a statement: the SQL in the body, settings in the URL.
     func request(_ sql: String, settings: [String: String], database: String?, queryID: String? = nil,
                  sessionID: String? = nil, parameters: [String: String] = [:], timeout: TimeInterval = 3600) throws -> URLRequest {
-        guard let base = endpoint.url, var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
+        guard let base = baseURL, var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             throw CHClientError.badURL
         }
         var items: [URLQueryItem] = []
@@ -221,7 +249,7 @@ public final class CHClient: Sendable {
             request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
             let reader = CHStreamReader(queryID: options.queryID, maxRows: options.maxRows, maxBytes: options.maxBytes,
                                         compressed: endpoint.compressesResults, jsonAsText: readsJSONAsText, continuation: continuation)
-            let delegate = CHQueryDelegate(trust: endpoint.trust, identity: identity, hostname: nil, reader: reader)
+            let delegate = CHQueryDelegate(trust: endpoint.trust, identity: identity, hostname: tlsHostname, reader: reader)
             // A session of its own: its results are read on its own queue.
             let queue = OperationQueue()
             queue.maxConcurrentOperationCount = 1
@@ -278,7 +306,8 @@ public final class CHClient: Sendable {
         let holder = CHLocked<URLSessionDataTask?>(nil)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let delegate = CHDownloadDelegate(trust: trust, identity: self.identity, handle: handle, progress: progress, continuation: continuation)
+                let delegate = CHDownloadDelegate(trust: trust, identity: self.identity, hostname: self.tlsHostname, handle: handle, progress: progress,
+                                                  continuation: continuation)
                 let session = URLSession(configuration: Self.configuration(timeout: 3600), delegate: delegate, delegateQueue: nil)
                 let task = session.dataTask(with: request)
                 holder.value = task
@@ -365,9 +394,9 @@ final class CHLocked<Value>: @unchecked Sendable {
 final class CHTrustDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     let trust: CHTrust
     let identity: CHClientIdentity?
-    let hostname: String?
+    let hostname: @Sendable () -> String?
 
-    init(trust: CHTrust, identity: CHClientIdentity?, hostname: String?) {
+    init(trust: CHTrust, identity: CHClientIdentity?, hostname: @escaping @Sendable () -> String?) {
         self.trust = trust
         self.identity = identity
         self.hostname = hostname
@@ -375,6 +404,6 @@ final class CHTrustDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
         -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-        CHAuthentication.answer(challenge, trust: trust, identity: identity, hostname: hostname)
+        CHAuthentication.answer(challenge, trust: trust, identity: identity, hostname: hostname())
     }
 }

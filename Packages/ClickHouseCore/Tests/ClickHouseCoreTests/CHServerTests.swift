@@ -1,4 +1,5 @@
 import ClickHouseCore
+@testable import ClickHouseSSH
 import Foundation
 import Testing
 
@@ -325,5 +326,100 @@ struct CHClientCertificateTests {
         let client = CHClient(endpoint: try Self.endpoint(), password: "viewer")
         await #expect(throws: (any Error).self) { try await client.connect(timeout: 10) }
         #expect(throws: CHClientIdentity.Failure.wrongPassword) { try Self.identity(password: "wrong") }
+    }
+}
+
+/// A server behind an SSH bastion: `CH_SSH_HOST` (localhost), `CH_SSH_PORT` (2222),
+/// `CH_SSH_USER`/`CH_SSH_PASSWORD`, `CH_SSH_KEYS` (a folder with id_ed25519, id_ecdsa,
+/// id_locked), `CH_SSH_TARGET` (chcl1:8123, as the bastion sees it).
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["CH_SSH_HOST"] != nil, "CH_SSH_HOST names no bastion"), .serialized)
+struct CHSSHTunnelTests {
+    static let environment = ProcessInfo.processInfo.environment
+
+    static func settings(password: String? = nil, key: String? = nil, known: String? = nil) -> CHSSHTunnel.Settings {
+        CHSSHTunnel.Settings(host: environment["CH_SSH_HOST"] ?? "localhost", port: Int(environment["CH_SSH_PORT"] ?? "") ?? 22,
+                             user: environment["CH_SSH_USER"] ?? "viewer", password: password,
+                             privateKey: key.flatMap { try? String(contentsOfFile: (environment["CH_SSH_KEYS"] ?? "") + "/" + $0, encoding: .utf8) },
+                             knownHostKey: known)
+    }
+
+    static var target: (String, Int) {
+        let parts = (environment["CH_SSH_TARGET"] ?? "chcl1:8123").split(separator: ":")
+        return (String(parts[0]), Int(parts[1]) ?? 8123)
+    }
+
+    /// A query through the tunnel: the server behind it answers.
+    static func query(through tunnel: CHSSHTunnel) async throws -> String {
+        var endpoint = CHEndpoint(host: target.0, port: target.1)
+        endpoint.compression = .none
+        let client = CHClient(endpoint: endpoint, password: environment["CH_TEST_PASSWORD"] ?? "viewer")
+        client.route(throughLocalPort: tunnel.localPort)
+        try await client.connect(timeout: 10)
+        let result = try await client.result("SELECT hostName(), count() FROM numbers(1000000)")
+        return result.rows().first?.joined(separator: " ") ?? ""
+    }
+
+    @Test func passwordsAndKeysOpenTunnels() async throws {
+        for (password, key) in [("viewer", nil), (nil, "id_ed25519"), (nil, "id_ecdsa")] as [(String?, String?)] {
+            let tunnel = try await CHSSHTunnel.open(Self.settings(password: password, key: key), target: Self.target.0, targetPort: Self.target.1)
+            #expect(try await Self.query(through: tunnel) == "\(Self.target.0) 1000000", "\(password ?? key ?? "")")
+            #expect(tunnel.hostKey.hasPrefix("ssh-") || tunnel.hostKey.hasPrefix("ecdsa-"))
+            tunnel.close()
+        }
+    }
+
+    /// The SSH connection drops (sleep, the bastion's idle limit): the same client goes on, through a new one.
+    @Test func aDroppedConnectionIsMadeAgain() async throws {
+        let tunnel = try await CHSSHTunnel.open(Self.settings(password: "viewer"), target: Self.target.0, targetPort: Self.target.1)
+        var endpoint = CHEndpoint(host: Self.target.0, port: Self.target.1)
+        endpoint.compression = .none
+        let client = CHClient(endpoint: endpoint, password: Self.environment["CH_TEST_PASSWORD"] ?? "viewer")
+        client.route(throughLocalPort: tunnel.localPort, keeping: tunnel)
+        try await client.connect(timeout: 10)
+        for _ in 0..<2 {
+            try await tunnel.dropConnectionForTesting()
+            let result = try await client.result("SELECT count() FROM numbers(1000)")
+            #expect(result.rows().first == ["1000"])
+        }
+        // Several connections at once, while signing in again.
+        try await tunnel.dropConnectionForTesting()
+        let counts = try await withThrowingTaskGroup(of: String.self) { group in
+            for n in 1...6 { group.addTask { try await client.result("SELECT count() FROM numbers(\(n))").rows().first?.first ?? "" } }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+        #expect(counts.sorted() == ["1", "2", "3", "4", "5", "6"])
+        #expect(tunnel.reconnectsForTesting == 3)
+        // The local port closed (iOS, suspended): open again on the same port.
+        let port = tunnel.localPort
+        try await tunnel.closeListenerForTesting()
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(tunnel.localPort == port)
+        #expect(try await client.result("SELECT 42").rows().first == ["42"])
+    }
+
+    @Test func wrongSecretsAndChangedKeysAreRefused() async throws {
+        await #expect(throws: CHSSHTunnel.Failure.authenticationFailed) {
+            _ = try await CHSSHTunnel.open(Self.settings(password: "wrong"), target: Self.target.0, targetPort: Self.target.1)
+        }
+        await #expect(throws: CHSSHTunnel.Failure.unreachable("127.0.0.1:1")) {
+            var settings = Self.settings(password: "viewer")
+            settings.host = "127.0.0.1"
+            settings.port = 1
+            _ = try await CHSSHTunnel.open(settings, target: Self.target.0, targetPort: Self.target.1)
+        }
+        let first = try await CHSSHTunnel.open(Self.settings(password: "viewer"), target: Self.target.0, targetPort: Self.target.1)
+        let seen = first.hostKey
+        first.close()
+        // The same key: accepted; another: refused before signing in.
+        let again = try await CHSSHTunnel.open(Self.settings(password: "viewer", known: seen), target: Self.target.0, targetPort: Self.target.1)
+        again.close()
+        do {
+            _ = try await CHSSHTunnel.open(Self.settings(password: "viewer", known: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"),
+                                           target: Self.target.0, targetPort: Self.target.1)
+            Issue.record("a changed key was accepted")
+        } catch let failure as CHSSHTunnel.Failure {
+            if case .hostKeyChanged = failure {} else { Issue.record("\(failure)") }
+        }
+        #expect(throws: CHSSHKey.Failure.encrypted) { _ = try CHSSHKey.parse(Self.settings(key: "id_locked").privateKey ?? "") }
     }
 }

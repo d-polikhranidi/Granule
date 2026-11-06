@@ -14,7 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
         // `-ViewerURL <url>`: a window on that server at launch (not saved); `-ViewerRun <SQL>` run in it.
-        if let url = UserDefaults.standard.string(forKey: "ViewerURL"), let (endpoint, password) = CHEndpoint.parse(url) {
+        if let url = UserDefaults.standard.string(forKey: "ViewerURL"), var (endpoint, password) = CHEndpoint.parse(url) {
+            Connections.debugBastion(for: &endpoint)
             let controller = QueryWindowController(endpoint: endpoint, password: password ?? "")
             controller.onNewTab = { [weak self] from in self?.open(from.endpoint, password: from.password, tabOf: from) }
             queryWindows.append(controller)

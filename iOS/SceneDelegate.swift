@@ -14,8 +14,12 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
         self.window = window
         #if DEBUG
+        if UserDefaults.standard.string(forKey: "ViewerForm") == "ssh" {
+            DispatchQueue.main.async { connections.showSSHFormForTesting() }
+        }
         // `-ViewerURL <url>`: a server opened at launch (not saved); `-ViewerRun <SQL>` run on it.
-        if let url = UserDefaults.standard.string(forKey: "ViewerURL"), let (endpoint, password) = CHEndpoint.parse(url) {
+        if let url = UserDefaults.standard.string(forKey: "ViewerURL"), var (endpoint, password) = CHEndpoint.parse(url) {
+            Connections.debugBastion(for: &endpoint)
             DispatchQueue.main.async { connections.open(endpoint, password: password ?? "") }
         }
         #endif

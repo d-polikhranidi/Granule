@@ -1,6 +1,15 @@
 {
-  "originHash" : "e183a434a1e0cc825430abd01e28ca60b5db7d4cacc48e0c963b9156cef86dbe",
+  "originHash" : "6cdf0048e2f770f7f45b09eb9817dc5a04984c9714d5d1fe6227ae2d6122c0f1",
   "pins" : [
+    {
+      "identity" : "gingham",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/digitalglobeby/Gingham",
+      "state" : {
+        "revision" : "ad3b531653119599e5a618809f3761bbbe61e3ec",
+        "version" : "1.0.1"
+      }
+    },
     {
       "identity" : "swift-asn1",
       "kind" : "remoteSourceControl",

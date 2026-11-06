@@ -172,18 +172,41 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    /// A row's kill statement, from its values by column name (`nil`: none for this view).
-    func killStatement(_ value: (String) -> String?) -> String? {
+    /// The statement across a cluster's servers: each system table read on
+    /// every replica (`clusterAllReplicas`), the server's name first (`host`),
+    /// aggregates per server.
+    func sql(cluster: String?) -> String {
+        guard let cluster else { return sql }
+        var text = sql
+        text = text.replacingOccurrences(of: #"FROM system\.(\w+)"#, with: "FROM clusterAllReplicas(\(CHSQL.quotedString(cluster)), system.$1)",
+                                         options: .regularExpression)
+        if let select = text.range(of: "SELECT ") { text.replaceSubrange(select, with: "SELECT hostName() AS host, ") }
+        if let group = text.range(of: "GROUP BY ") { text.replaceSubrange(group, with: "GROUP BY host, ") }
+        return text
+    }
+
+    /// A row's kill statement, from its values by column name (`nil`: none
+    /// for this view), on every server of the cluster if given.
+    func killStatement(cluster: String? = nil, _ value: (String) -> String?) -> String? {
+        let onCluster = cluster.map { " ON CLUSTER \(CHSQL.quotedName($0))" } ?? ""
         switch self {
         case .processes, .recentQueries:
             guard let id = value("query_id") else { return nil }
-            return "KILL QUERY WHERE query_id = \(CHSQL.quotedString(id)) ASYNC"
+            return "KILL QUERY\(onCluster) WHERE query_id = \(CHSQL.quotedString(id)) ASYNC"
         case .mutations:
             guard let database = value("database"), let table = value("table"), let id = value("mutation_id") else { return nil }
-            return "KILL MUTATION WHERE database = \(CHSQL.quotedString(database)) AND table = \(CHSQL.quotedString(table)) AND mutation_id = \(CHSQL.quotedString(id))"
+            return "KILL MUTATION\(onCluster) WHERE database = \(CHSQL.quotedString(database)) AND table = \(CHSQL.quotedString(table)) AND mutation_id = \(CHSQL.quotedString(id))"
         default:
             return nil
         }
+    }
+
+    /// The clusters a server knows with more than itself in them (their names).
+    static func clusters(_ client: CHClient) async -> [String] {
+        let rows = (try? await client.result("""
+            SELECT cluster FROM system.clusters GROUP BY cluster HAVING count() > 1 OR countIf(is_local = 0) > 0 ORDER BY cluster
+            """))?.rows() ?? []
+        return rows.compactMap(\.first)
     }
 
     /// What killing the selected rows is called.
@@ -195,8 +218,5 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
         }
     }
 
-    /// The view a statement shows, if it's one of these as they were run.
-    static func view(of sql: String) -> ServerView? {
-        allCases.first { $0.sql == sql }
-    }
+
 }

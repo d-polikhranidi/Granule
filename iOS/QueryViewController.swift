@@ -36,6 +36,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     private let detailsBar = UIStackView()
     private let detailsButton = UIButton(configuration: .gray())
     private var detailsTable: Schema.Table?
+    /// The server's clusters (the views can read across one).
+    private var clusters: [String] = []
 
     init(endpoint: CHEndpoint, client: CHClient) {
         self.endpoint = endpoint
@@ -155,6 +157,11 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
         queries.onChange = { [weak self] in self?.updateStatus() }
         queries.onText = { [weak self] text in self?.showText(text) }
+        queries.onKillFailure = { [weak self] error in
+            let alert = UIAlertController(title: String(localized: "Not everything was killed"), message: error.viewerDescription, preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: String(localized: "OK"), style: .default))
+            self?.present(alert, animated: true)
+        }
         connect()
     }
 
@@ -170,6 +177,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                 let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)
                 statusLabel.text = String(localized: "Connected to ClickHouse \(info.version.text) (\(info.timeZone)).")
                 onConnected()
+                Task { [weak self, client] in self?.clusters = await ServerView.clusters(client) }
                 Task { [weak self, client] in
                     let completions = await Completions.load(client)
                     self?.completions = completions
@@ -522,7 +530,16 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             guard let self else { return }
             checker.checkNow(text: editor.text, cursor: editor.selectedRange.location)
         }
-        return [historyMenu, check, explain, export, editorSize]
+        let scopes = [nil] + clusters
+        let scope = UIMenu(title: String(localized: "Server Views"), image: UIImage(systemName: "server.rack"), children: scopes.map { cluster in
+            UIAction(title: cluster.map { String(localized: "Of cluster \($0)") } ?? String(localized: "Of this server"),
+                     state: queries.cluster == cluster ? .on : .off) { [weak self] _ in
+                guard let self else { return }
+                queries.cluster = cluster
+                if let view = queries.view { show(view) }
+            }
+        })
+        return [historyMenu, check, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize]
     }
 
     private func resizeEditor(by delta: CGFloat) {

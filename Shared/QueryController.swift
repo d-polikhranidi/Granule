@@ -18,6 +18,8 @@ final class QueryController {
     var onChange: () -> Void = {}
     /// Called with a statement's text output (its own `FORMAT`, or a statement without rows).
     var onText: (String?) -> Void = { _ in }
+    /// Called when killing queries or mutations failed (shown apart: the view keeps refreshing).
+    var onKillFailure: (Error) -> Void = { _ in }
 
     enum State {
         case idle
@@ -46,6 +48,8 @@ final class QueryController {
     private(set) var currentDatabase: String?
     /// The server's view shown (its statement run as is), refreshed while it's live.
     private(set) var view: ServerView?
+    /// The cluster the views read across (`nil`: this server alone).
+    var cluster: String?
     private var refreshing: Task<Void, Never>?
     /// When the shown view was last read.
     private(set) var refreshed: Date?
@@ -85,13 +89,16 @@ final class QueryController {
     /// with its own `FORMAT`) to `onText`.
     func run(_ sql: String, parameters: [String: String] = [:]) {
         cancel()
-        view = ServerView.view(of: sql)
+        view = nil
         start(sql, parameters: parameters, refresh: false)
     }
 
-    /// A server view: its rows, read again every two seconds while it's live and shown.
+    /// A server view: its rows, read again every two seconds while it's live
+    /// and shown; across the cluster if one is chosen.
     func show(_ view: ServerView) {
-        run(view.sql)
+        cancel()
+        self.view = view
+        start(view.sql(cluster: cluster), parameters: [:], refresh: false)
     }
 
     private func start(_ sql: String, parameters: [String: String], refresh: Bool) {
@@ -119,7 +126,7 @@ final class QueryController {
         refreshing = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard let self, !Task.isCancelled, self.view == view, !self.isRunning else { return }
-            self.start(view.sql, parameters: [:], refresh: true)
+            self.start(view.sql(cluster: self.cluster), parameters: [:], refresh: true)
         }
     }
 
@@ -340,17 +347,34 @@ final class QueryController {
         guard let view, let source else { return }
         let names = source.result.names
         let statements = rows.compactMap { row in
-            view.killStatement { name in names.firstIndex(of: name).flatMap { source.fullText(row: row, columnIndex: $0) } }
+            view.killStatement(cluster: cluster) { name in names.firstIndex(of: name).flatMap { source.fullText(row: row, columnIndex: $0) } }
         }
         guard !statements.isEmpty else { return }
+        // Without a cluster's Keeper, ON CLUSTER can't run: the rows of this server are killed here,
+        // the others' can't be (their servers aren't connected).
+        let hosts = rows.map { row in names.firstIndex(of: "host").flatMap { source.fullText(row: row, columnIndex: $0) } }
+        let localStatements = rows.compactMap { row in
+            view.killStatement { name in names.firstIndex(of: name).flatMap { source.fullText(row: row, columnIndex: $0) } }
+        }
+        let thisServer = client.serverInfo?.displayName
         Task { [weak self, client] in
             var failure: Error?
-            for statement in statements {
-                do { _ = try await client.plainText(statement + " FORMAT Null") } catch { failure = error }
+            for (index, statement) in statements.enumerated() {
+                do {
+                    _ = try await client.plainText(statement + " FORMAT Null")
+                } catch let error as CHServerError where error.code == 139 && index < localStatements.count {
+                    if hosts[index] == nil || hosts[index] == thisServer {
+                        do { _ = try await client.plainText(localStatements[index] + " FORMAT Null") } catch { failure = error }
+                    } else {
+                        failure = CHServerError(text: "Code: 139. DB::Exception: " + String(localized: "This cluster has no Keeper, so a query on \(hosts[index] ?? "another server") can be killed only by connecting to it."))
+                    }
+                } catch {
+                    failure = error
+                }
             }
             guard let self else { return }
-            if let failure { state = .failed(failure) }
-            if !isRunning { start(view.sql, parameters: [:], refresh: true) }
+            if let failure { onKillFailure(failure) }
+            if !isRunning { start(view.sql(cluster: cluster), parameters: [:], refresh: true) }
             onChange()
         }
     }
@@ -419,7 +443,7 @@ final class QueryController {
         if table.isCopying { parts.append(String(localized: "Copying…")) }
         if table.isExporting { parts.append(String(localized: "Exporting…")) }
         if let view, let refreshed, !isRunning || isRefreshing {
-            parts.insert(view.title, at: 0)
+            parts.insert(cluster.map { "\(view.title) · \($0)" } ?? view.title, at: 0)
             if view.isLive { parts.append(String(localized: "live, read at \(refreshed.formatted(date: .omitted, time: .standard))")) }
         }
         if !rewrittenColumns.isEmpty {

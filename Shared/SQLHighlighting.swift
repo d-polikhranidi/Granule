@@ -8,6 +8,7 @@ typealias PlatformColor = UIColor
 typealias PlatformFont = UIFont
 #endif
 import ClickHouseCore
+import SwiftUI
 
 /// What the user chose in Settings > Appearance: the editor's theme and
 /// size, the result's text size and density, and dark backgrounds for both
@@ -21,12 +22,14 @@ enum AppearanceSettings {
 
     static var editorFontSize: CGFloat {
         let size = UserDefaults.standard.double(forKey: "EditorFontSize")
-        #if os(macOS)
-        return size >= 9 ? size : 13
-        #else
-        return size >= 9 ? size : 15
-        #endif
+        return size >= 9 ? size : defaultEditorFontSize
     }
+
+    #if os(macOS)
+    static let defaultEditorFontSize: CGFloat = 13
+    #else
+    static let defaultEditorFontSize: CGFloat = 15
+    #endif
 
     /// The result's text size (`nil`: the system's).
     static var resultFontSize: CGFloat? {
@@ -162,5 +165,101 @@ enum SQLHighlighting {
                                    .underlineColor: problem.isError ? PlatformColor.systemRed : PlatformColor.systemOrange], range: range)
         }
         storage.endEditing()
+    }
+}
+
+/// Settings > Appearance: the Mac's Settings window pane, a sheet on the iPad and iPhone.
+struct AppearanceSettingsView: View {
+    @AppStorage("EditorTheme") private var theme = EditorTheme.standard.rawValue
+    @AppStorage("EditorFontSize") private var editorFontSize = Double(AppearanceSettings.defaultEditorFontSize)
+    @AppStorage("ResultFontSize") private var resultFontSize = 0.0
+    @AppStorage("ResultDensity") private var density = "regular"
+    @AppStorage("ResultAlternatingRows") private var alternatingRows = true
+    @AppStorage("DarkContentBackground") private var darkContent = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    private static let sample = "SELECT country, count() AS visits -- this month\nFROM events\nWHERE event_time >= {since:DateTime} AND url LIKE '%/page/%'\nGROUP BY country ORDER BY visits DESC LIMIT 10"
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(isOn: $darkContent) {
+                    Text("Dark background for the editor and results")
+                    #if os(macOS)
+                    Text("The windows themselves follow System Settings › Appearance (Light, Dark or Auto).")
+                    #else
+                    Text("The app itself follows Settings › Display & Brightness (Light, Dark or Automatic).")
+                    #endif
+                }
+            }
+            Section("Editor") {
+                Picker("Theme", selection: $theme) {
+                    ForEach(EditorTheme.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+                }
+                Stepper(value: $editorFontSize, in: 10...24, step: 1) {
+                    LabeledContent("Font size", value: String(localized: "\(Int(editorFontSize)) pt"))
+                }
+                preview
+            }
+            Section("Results") {
+                Picker("Text size", selection: $resultFontSize) {
+                    Text("System").tag(0.0)
+                    ForEach([11.0, 12, 13, 14, 15, 16, 18], id: \.self) { Text(String(localized: "\(Int($0)) pt")).tag($0) }
+                }
+                Picker("Rows", selection: $density) {
+                    Text("Compact").tag("compact")
+                    Text("Regular").tag("regular")
+                    Text("Spacious").tag("spacious")
+                }
+                .pickerStyle(.segmented)
+                Toggle("Alternating row backgrounds", isOn: $alternatingRows)
+            }
+        }
+        .formStyle(.grouped)
+        #if os(macOS)
+        .frame(width: 560)
+        .fixedSize(horizontal: false, vertical: true)
+        #endif
+        .onChange(of: theme) { changed() }
+        .onChange(of: editorFontSize) { changed() }
+        .onChange(of: resultFontSize) { changed() }
+        .onChange(of: density) { changed() }
+        .onChange(of: alternatingRows) { changed() }
+        .onChange(of: darkContent) { changed() }
+    }
+
+    /// The theme on a statement, as the editor will show it.
+    private var preview: some View {
+        let storage = NSTextStorage(string: Self.sample)
+        SQLHighlighting.apply(to: storage)
+        let background = EditorTheme(rawValue: theme)?.background
+        #if os(macOS)
+        let fallback = Color(nsColor: .textBackgroundColor)
+        let text = AttributedString(storage)
+        #else
+        let fallback = Color(uiColor: .secondarySystemBackground)
+        let text = (try? AttributedString(storage, including: \.uiKit)) ?? AttributedString(storage.string)
+        #endif
+        return Text(text)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(background.map { Color($0) } ?? fallback, in: .rect(cornerRadius: 6))
+            .environment(\.colorScheme, darkContent ? .dark : colorScheme)
+            .id("\(theme)\(editorFontSize)\(darkContent)")
+    }
+
+    private func changed() {
+        NotificationCenter.default.post(name: AppearanceSettings.didChange, object: nil)
+    }
+}
+
+private extension Color {
+    init(_ color: PlatformColor) {
+        #if os(macOS)
+        self.init(nsColor: color)
+        #else
+        self.init(uiColor: color)
+        #endif
     }
 }

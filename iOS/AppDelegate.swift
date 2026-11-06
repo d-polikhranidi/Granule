@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 
 /// The iPad and iPhone app: each window (scene) lists the connections and
@@ -14,6 +15,15 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     override func buildMenu(with builder: UIMenuBuilder) {
         super.buildMenu(with: builder)
         guard builder.system == .main else { return }
+        // Settings… in the app menu, where the system puts a Settings bundle's.
+        let settings = UIKeyCommand(title: String(localized: "Settings…"), action: #selector(showSettings(_:)), input: ",", modifierFlags: .command)
+        if builder.menu(for: .preferences) != nil {
+            builder.replaceChildren(ofMenu: .preferences) { _ in [settings] }
+        } else if builder.menu(for: .about) != nil {
+            builder.insertSibling(UIMenu(options: .displayInline, children: [settings]), afterMenu: .about)
+        } else {
+            builder.insertChild(UIMenu(options: .displayInline, children: [settings]), atStartOfMenu: .application)
+        }
         builder.insertChild(UIMenu(options: .displayInline, children: [
             UIKeyCommand(title: String(localized: "New Connection"), action: #selector(ConnectionsViewController.newConnection(_:)), input: "n", modifierFlags: .command),
         ]), atStartOfMenu: .file)
@@ -32,6 +42,26 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         builder.insertChild(UIMenu(options: .displayInline, children: [
             UIKeyCommand(title: String(localized: "Show Chart"), action: #selector(QueryViewController.chartCommand(_:)), input: "k", modifierFlags: [.command, .shift]),
         ]), atStartOfMenu: .view)
+    }
+
+    /// Settings… (⌘,): over the window in front, wherever it is.
+    @objc func showSettings(_ sender: Any?) {
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
+        guard var top = scene?.keyWindow?.rootViewController else { return }
+        while let presented = top.presentedViewController { top = presented }
+        Self.presentSettings(from: top)
+    }
+
+    /// Settings > Appearance in a sheet: the editor's theme and size, the result's look.
+    static func presentSettings(from controller: UIViewController) {
+        let settings = UIHostingController(rootView: AppearanceSettingsView())
+        settings.title = String(localized: "Settings")
+        settings.navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak settings] _ in
+            settings?.dismiss(animated: true)
+        })
+        let navigation = UINavigationController(rootViewController: settings)
+        navigation.modalPresentationStyle = .formSheet
+        controller.present(navigation, animated: true)
     }
 
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,

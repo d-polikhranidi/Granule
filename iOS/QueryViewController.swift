@@ -15,6 +15,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     private let editor = UITextView()
     private let table = GHTableView(frame: .zero)
+    /// Where the result shows (the table, a text, a chart).
+    private let resultsView = UIView()
     private let textOutput = UITextView()
     private let messageLabel = UILabel()
     private let statusLabel = UILabel()
@@ -96,10 +98,6 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         editor.smartInsertDeleteType = .no
         editor.keyboardType = .asciiCapable
         editor.delegate = self
-        // A production server's editor is tinted, so its statements aren't taken for a test one's.
-        editor.backgroundColor = endpoint.environment == .production
-            ? UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.24, green: 0.13, blue: 0.13, alpha: 1) : UIColor(red: 1, green: 0.955, blue: 0.95, alpha: 1) }
-            : AppearanceSettings.theme.background ?? .secondarySystemBackground
         editor.textContainerInset = UIEdgeInsets(top: 8, left: 6, bottom: 8, right: 6)
         editor.text = UserDefaults.standard.string(forKey: "Editor \(endpoint.id.uuidString)") ?? "SELECT version(), uptime(), timezone()\n"
         SQLHighlighting.apply(to: editor.textStorage)
@@ -121,7 +119,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         statusLabel.textColor = .secondaryLabel
         statusLabel.adjustsFontForContentSizeCategory = true
 
-        let results = UIView()
+        let results = resultsView
         chart.view.isHidden = true
         for content in [table, textOutput, chart.view] as [UIView] {
             content.translatesAutoresizingMaskIntoConstraints = false
@@ -185,7 +183,39 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             alert.addAction(UIAlertAction(title: String(localized: "OK"), style: .default))
             self?.present(alert, animated: true)
         }
+        applyAppearance()
+        NotificationCenter.default.addObserver(forName: AppearanceSettings.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyAppearance() }
+        }
         connect()
+    }
+
+    /// Settings > Appearance on the editor and the result: the theme and sizes, dark
+    /// backgrounds, and a production server's tint (it wins over the theme's background).
+    private func applyAppearance() {
+        editor.font = SQLHighlighting.font
+        let selection = editor.selectedRange
+        SQLHighlighting.apply(to: editor.textStorage, problems: underlined)
+        editor.selectedRange = selection
+        textOutput.font = SQLHighlighting.font
+        let style: UIUserInterfaceStyle = AppearanceSettings.darkContent ? .dark : .unspecified
+        editor.overrideUserInterfaceStyle = style
+        resultsView.overrideUserInterfaceStyle = style
+        // A production server's editor is tinted, so its statements aren't taken for a test one's.
+        editor.backgroundColor = endpoint.environment == .production
+            ? UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.24, green: 0.13, blue: 0.13, alpha: 1) : UIColor(red: 1, green: 0.955, blue: 0.95, alpha: 1) }
+            : AppearanceSettings.theme.background ?? .secondarySystemBackground
+        var tableStyle = table.tableStyle
+        tableStyle.fontSize = AppearanceSettings.resultFontSize
+        table.tableStyle = tableStyle
+        // Set again so the rows' height follows a new text size too.
+        table.density = nil
+        table.density = switch AppearanceSettings.resultDensity {
+        case "compact": .compact
+        case "spacious": .spacious
+        default: .regular
+        }
+        table.usesAlternatingRowBackgroundColors = AppearanceSettings.alternatingRows
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -674,7 +704,11 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         })
         let chartAction = UIAction(title: isShowingChart ? String(localized: "Show Table") : String(localized: "Show Chart"),
                                    image: UIImage(systemName: isShowingChart ? "tablecells" : "chart.xyaxis.line")) { [weak self] _ in self?.toggleChart() }
-        return [chartAction, historyMenu, check, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize]
+        let settings = UIAction(title: String(localized: "Settings"), image: UIImage(systemName: "gearshape")) { [weak self] _ in
+            guard let self else { return }
+            AppDelegate.presentSettings(from: self)
+        }
+        return [chartAction, historyMenu, check, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize, settings]
     }
 
     private func resizeEditor(by delta: CGFloat) {

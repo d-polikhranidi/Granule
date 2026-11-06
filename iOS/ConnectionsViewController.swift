@@ -23,6 +23,11 @@ final class ConnectionsViewController: UICollectionViewController {
         title = String(localized: "Connections")
         navigationController?.navigationBar.prefersLargeTitles = true
         navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .add, primaryAction: UIAction { [weak self] _ in self?.edit(nil) })
+        navigationItem.leftBarButtonItem = UIBarButtonItem(title: String(localized: "Settings"), image: UIImage(systemName: "gearshape"),
+                                                           primaryAction: UIAction { [weak self] _ in
+            guard let self else { return }
+            AppDelegate.presentSettings(from: self)
+        })
         let registration = UICollectionView.CellRegistration<UICollectionViewListCell, UUID> { cell, _, id in
             guard let endpoint = Connections.shared.endpoints.first(where: { $0.id == id }) else { return }
             var content = cell.defaultContentConfiguration()

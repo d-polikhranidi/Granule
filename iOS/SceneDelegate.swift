@@ -17,6 +17,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         if UserDefaults.standard.string(forKey: "ViewerForm") == "ssh" {
             DispatchQueue.main.async { connections.showSSHFormForTesting() }
         }
+        // `-ViewerSettings YES`: Settings at launch (for screenshots).
+        if UserDefaults.standard.bool(forKey: "ViewerSettings") {
+            DispatchQueue.main.async { AppDelegate.presentSettings(from: connections) }
+        }
         // `-ViewerForm new`: File > New Connection's form.
         if UserDefaults.standard.string(forKey: "ViewerForm") == "new" {
             DispatchQueue.main.async { connections.newConnection(nil) }

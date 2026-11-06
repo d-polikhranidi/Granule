@@ -28,16 +28,23 @@ public struct CHTexts {
     /// returns the bytes it wrote.
     mutating func append(count: Int, capacity: Int,
                          _ write: (UnsafeMutablePointer<CChar>, UnsafeMutablePointer<UInt32>, UInt32) -> Int) {
+        append(count: count, totalCapacity: count * capacity, write)
+    }
+
+    /// As `append(count:capacity:_:)`, with room for all of them together.
+    mutating func append(count: Int, totalCapacity: Int,
+                         _ write: (UnsafeMutablePointer<CChar>, UnsafeMutablePointer<UInt32>, UInt32) -> Int) {
         guard count > 0 else { return }
         let byteStart = bytes.count, endStart = ends.count
-        bytes.append(contentsOf: repeatElement(0, count: count * capacity))
+        // One spare byte: a pointer into it stays valid when nothing is written.
+        bytes.append(contentsOf: repeatElement(0, count: totalCapacity + 1))
         ends.append(contentsOf: repeatElement(0, count: count))
         let written = bytes.withUnsafeMutableBytes { raw in
             ends.withUnsafeMutableBufferPointer { endBuffer in
                 write((raw.baseAddress! + byteStart).assumingMemoryBound(to: CChar.self), endBuffer.baseAddress! + endStart, UInt32(byteStart))
             }
         }
-        bytes.removeLast(count * capacity - written)
+        bytes.removeLast(totalCapacity + 1 - written)
     }
 
     mutating func append(_ text: UnsafeRawBufferPointer) {
@@ -48,8 +55,8 @@ public struct CHTexts {
 
 extension CHColumn {
     /// The text of `rows` as `text(_:context:)` writes each (NULL: no text),
-    /// added to `texts`: in C at once for numbers, dates, times, UUIDs and
-    /// addresses, as they are for strings.
+    /// added to `texts`: in C at once for numbers (floats too), dates, times,
+    /// UUIDs and addresses, as they are for strings.
     public func appendTexts(rows: Range<Int>, context: CHTextContext, to texts: inout CHTexts) {
         guard !rows.isEmpty else { return }
         var nulls: CHBuffer?
@@ -89,6 +96,40 @@ extension CHColumn {
                 end[rows.lowerBound + index] &+ base
             }
             return
+        case .array(let offsets, let elements):
+            // The elements' texts at once, then each row's joined in C.
+            let end = offsets.pointer(to: UInt64.self)
+            let first = rows.lowerBound == 0 ? 0 : Int(end[rows.lowerBound - 1]), last = Int(end[rows.upperBound - 1])
+            if case .map = values.type {
+                guard case .tuple(let parts) = elements.storage, parts.count == 2,
+                      let keyQuoting = CHColumn.quoting(ofElements: parts[0].type),
+                      let valueQuoting = CHColumn.quoting(ofElements: parts[1].type) else { break }
+                var keys = CHTexts(), mapValues = CHTexts()
+                parts[0].appendTexts(rows: first..<last, context: context, to: &keys)
+                parts[1].appendTexts(rows: first..<last, context: context, to: &mapValues)
+                let keyNulls = parts[0].nullFlags(first..<last), valueNulls = parts[1].nullFlags(first..<last)
+                let room = (keys.bytes.count + mapValues.bytes.count) * 2 + (last - first) * 14 + rows.count * 2
+                texts.append(count: rows.count, totalCapacity: room) { out, ends, base in
+                    keys.withPointers(nulls: keyNulls) { keyBytes, keyEnds, keyNulls in
+                        mapValues.withPointers(nulls: valueNulls) { valueBytes, valueEnds, valueNulls in
+                            ch_join_maps(end, rows.lowerBound, rows.count, UInt64(first), keyBytes, keyEnds, keyNulls, keyQuoting,
+                                         valueBytes, valueEnds, valueNulls, valueQuoting, out, ends, base)
+                        }
+                    }
+                }
+                return
+            }
+            guard let quoting = CHColumn.quoting(ofElements: elements.type) else { break }
+            var inner = CHTexts()
+            elements.appendTexts(rows: first..<last, context: context, to: &inner)
+            let elementNulls = elements.nullFlags(first..<last)
+            let room = inner.bytes.count * (quoting == 2 ? 2 : 1) + (last - first) * 7 + rows.count * 2
+            texts.append(count: rows.count, totalCapacity: room) { out, ends, base in
+                inner.withPointers(nulls: elementNulls) { bytes, textEnds, nulls in
+                    ch_join_arrays(end, rows.lowerBound, rows.count, UInt64(first), bytes, textEnds, nulls, quoting, out, ends, base)
+                }
+            }
+            return
         case .fixed(let buffer, _):
             let source = UnsafeRawPointer(buffer.base)
             switch values.type {
@@ -96,6 +137,12 @@ extension CHColumn {
                 guard let kind = values.type.numberKind else { break }
                 texts.append(count: rows.count, capacity: capacity) { out, ends, base in
                     ch_format_integers(kind, source, nullBytes, rows.lowerBound, rows.count, out, ends, base)
+                }
+                return
+            case .float32, .float64, .bfloat16:
+                guard let kind = values.type.numberKind else { break }
+                texts.append(count: rows.count, capacity: capacity) { out, ends, base in
+                    ch_format_floats(kind, source, nullBytes, rows.lowerBound, rows.count, out, ends, base)
                 }
                 return
             case .decimal(_, let scale):
@@ -141,7 +188,7 @@ extension CHColumn {
         default:
             break
         }
-        // The rest one by one: floats, strings with NULLs, enums, composites, …
+        // The rest one by one: strings with NULLs, enums, composites, …
         var writer = CHTextWriter()
         for row in rows {
             withText(row, context: context, writer: &writer) { texts.append($0) }
@@ -149,7 +196,55 @@ extension CHColumn {
     }
 }
 
+extension CHColumn {
+    /// How the texts of an array's elements of `type` are written inside it:
+    /// as they are (0: numbers, composites), in single quotes (1: dates, times,
+    /// UUIDs, addresses), or quoted and escaped (2: strings, enums, JSON).
+    /// `nil` where the quoted text isn't the text in quotes (FixedString keeps
+    /// its zeros, Variant and Dynamic quote by their kind): those are written one by one.
+    static func quoting(ofElements type: CHType) -> Int32? {
+        var type = type
+        if case .lowCardinality(let inner) = type { type = inner }
+        if case .nullable(let inner) = type { type = inner }
+        switch type {
+        case .int8, .int16, .int32, .int64, .int128, .int256, .uint8, .uint16, .uint32, .uint64, .uint128, .uint256,
+             .float32, .float64, .bfloat16, .bool, .decimal, .interval, .array, .tuple, .map, .nothing:
+            return 0
+        case .date, .date32, .dateTime, .dateTime64, .time, .time64, .uuid, .ipv4, .ipv6:
+            return 1
+        case .string, .json, .enum8, .enum16:
+            return 2
+        case .fixedString, .variant, .dynamic, .unsupported, .nullable, .lowCardinality:
+            return nil
+        }
+    }
+
+    /// Which of `rows` are NULL (1), from the first; `nil` when none can be.
+    func nullFlags(_ rows: Range<Int>) -> [UInt8]? {
+        switch storage {
+        case .nullable(let mask, _):
+            return Array(UnsafeBufferPointer(start: mask.pointer(to: UInt8.self) + rows.lowerBound, count: rows.count))
+        case .lowCardinality(_, let indexes):
+            guard case .nullable = type.lowCardinalityInner else { return nil }
+            let index = indexes.pointer(to: UInt32.self)
+            return rows.map { index[$0] == 0 ? 1 : 0 }
+        default:
+            return nil
+        }
+    }
+}
+
 extension CHTexts {
+    /// The texts' bytes and ends, and `nulls`' bytes (nil without), for C.
+    fileprivate func withPointers<Result>(nulls: [UInt8]?, _ body: (UnsafePointer<UInt8>?, UnsafePointer<UInt32>?, UnsafePointer<UInt8>?) -> Result) -> Result {
+        bytes.withUnsafeBufferPointer { bytes in
+            ends.withUnsafeBufferPointer { ends in
+                guard let nulls else { return body(bytes.baseAddress, ends.baseAddress, nil) }
+                return nulls.withUnsafeBufferPointer { body(bytes.baseAddress, ends.baseAddress, $0.baseAddress) }
+            }
+        }
+    }
+
     /// The last `count` texts made the bytes given, ending where `end(i)` says.
     fileprivate mutating func replaceLast(_ count: Int, bytes text: UnsafeRawBufferPointer, end: (Int) -> UInt32) {
         bytes.append(contentsOf: text)

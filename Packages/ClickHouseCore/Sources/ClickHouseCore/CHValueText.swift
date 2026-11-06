@@ -188,12 +188,14 @@ public struct CHTextWriter {
             guard let kind = type.numberKind else { return }
             appendFormatted { ch_format_integer(kind, base, row, $0) }
         case .float64:
-            appendFloat(buffer[Double.self, row].description)
+            let value = buffer[Double.self, row]
+            appendFormatted { ch_format_float64(value, $0) }
         case .float32:
-            appendFloat(buffer[Float.self, row].description)
+            let value = buffer[Float.self, row]
+            appendFormatted { ch_format_float32(value, $0) }
         case .bfloat16:
             let value = Float(bitPattern: UInt32(buffer[UInt16.self, row]) << 16)
-            appendFloat(value.description)
+            appendFormatted { ch_format_float32(value, $0) }
         case .bool:
             if buffer[UInt8.self, row] != 0 { append("true") } else { append("false") }
         case .decimal(_, let scale):
@@ -286,17 +288,6 @@ public struct CHTextWriter {
             }
         }
         append(UInt8(ascii: "'"))
-    }
-
-    /// A float as ClickHouse writes it: its shortest digits (Swift's), as a
-    /// whole number below 10^21, in exponent form below 10^-6 (as JavaScript).
-    private mutating func appendFloat(_ description: String) {
-        var text = description
-        text.withUTF8 { utf8 in
-            utf8.withMemoryRebound(to: CChar.self) { shortest in
-                appendFormatted { ch_reformat_float(shortest.baseAddress, shortest.count, $0) }
-            }
-        }
     }
 }
 

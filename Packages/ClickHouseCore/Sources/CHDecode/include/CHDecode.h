@@ -76,10 +76,11 @@ size_t ch_format_ipv4(uint32_t address, char *out);
 /// An IPv6 address from its 16 bytes (an IPv4-mapped one as ::ffff:a.b.c.d).
 size_t ch_format_ipv6(const uint8_t *bytes, char *out);
 
-/// A float's shortest digits as Swift's `description` writes them (`1e-07`,
-/// `1.2345678901234568e+20`, `-0.0`, `inf`) as ClickHouse writes floats: a
-/// whole number below 10^21, exponent form below 10^-6 (as JavaScript).
-size_t ch_reformat_float(const char *shortest, size_t count, char *out);
+/// A float as ClickHouse writes it: its shortest digits (Ryu's), as a whole
+/// number below 10^21, in exponent form below 10^-6 (as JavaScript); `nan`,
+/// `inf`, `-inf`, `-0`. At most 25 bytes.
+size_t ch_format_float64(double value, char *out);
+size_t ch_format_float32(float value, char *out);
 
 // MARK: Text of many values
 
@@ -90,6 +91,23 @@ size_t ch_reformat_float(const char *shortest, size_t count, char *out);
 
 size_t ch_format_integers(ch_number_kind kind, const void *src, const uint8_t *nulls, size_t start, size_t count,
                           char *out, uint32_t *ends, uint32_t base);
+/// Float64, Float32 or BFloat16 (`CH_F64`, `CH_F32`, `CH_BF16`).
+size_t ch_format_floats(ch_number_kind kind, const void *src, const uint8_t *nulls, size_t start, size_t count,
+                        char *out, uint32_t *ends, uint32_t base);
+/// Arrays (rows `start` to `start + count` of `offsets`, ClickHouse's ends of each
+/// row's elements) as ClickHouse writes them, `[a,b]`, from their elements'
+/// texts one after another (`bytes`, `text_ends`, from element `first`): each
+/// as it is (`quoting` 0), in single quotes (1), or quoted and escaped (2);
+/// NULL where `nulls` (if not NULL) says. Room: the texts' bytes (twice when
+/// escaped), 7 a element and 2 a row.
+size_t ch_join_arrays(const uint64_t *offsets, size_t start, size_t count, uint64_t first,
+                      const uint8_t *bytes, const uint32_t *text_ends, const uint8_t *nulls, int quoting,
+                      char *out, uint32_t *ends, uint32_t base);
+/// Maps as ClickHouse writes them, `{k:v,…}`: keys and values as `ch_join_arrays`'s elements.
+size_t ch_join_maps(const uint64_t *offsets, size_t start, size_t count, uint64_t first,
+                    const uint8_t *key_bytes, const uint32_t *key_ends, const uint8_t *key_nulls, int key_quoting,
+                    const uint8_t *value_bytes, const uint32_t *value_ends, const uint8_t *value_nulls, int value_quoting,
+                    char *out, uint32_t *ends, uint32_t base);
 size_t ch_format_decimals(ch_number_kind kind, const void *src, const uint8_t *nulls, size_t start, size_t count, int scale,
                           char *out, uint32_t *ends, uint32_t base);
 /// Date (UInt16 days, `wide` 0) or Date32 (Int32 days, `wide` 1).

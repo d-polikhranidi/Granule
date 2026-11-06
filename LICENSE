@@ -26,3 +26,8 @@ This license covers this repository's own code. The app is built with
 Gingham, a separate binary under its own license
 (https://github.com/digitalglobeby/Gingham); Shared/GinghamKey.swift holds a
 free Gingham key that unlocks only the bundle id by.digitalglobe.Clickhouse-Viewer.
+
+Packages/ClickHouseCore/Sources/CHDecode/ryu holds Ryu by Ulf Adams, under the
+Boost Software License 1.0 (its LICENSE-Boost there). The SSH tunnels use
+Apple's swift-nio, swift-nio-ssh and swift-crypto (Apache License 2.0), fetched
+by Swift Package Manager.

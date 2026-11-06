@@ -36,9 +36,10 @@ let package = Package(
             swiftSettings: [.enableUpcomingFeature("ApproachableConcurrency")]
         ),
         // The loops over every value of a result in C: fast in debug builds too.
+        // Ryu (ryu/, Boost license) for floats' shortest digits.
         .target(
             name: "CHDecode",
-            cSettings: [.unsafeFlags(["-O3"])]
+            cSettings: [.headerSearchPath("."), .unsafeFlags(["-O3"])]
         ),
         .executableTarget(
             name: "CHBench",
@@ -47,7 +48,7 @@ let package = Package(
         ),
         .testTarget(
             name: "ClickHouseCoreTests",
-            dependencies: ["ClickHouseCore", "ClickHouseSSH"],
+            dependencies: ["ClickHouseCore", "ClickHouseSSH", "CHDecode"],
             swiftSettings: [.enableUpcomingFeature("ApproachableConcurrency")]
         ),
     ]

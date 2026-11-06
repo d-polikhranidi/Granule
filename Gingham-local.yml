@@ -1,0 +1,4 @@
+# Gingham from its sources around this repository (development).
+packages:
+  Gingham:
+    path: ../..

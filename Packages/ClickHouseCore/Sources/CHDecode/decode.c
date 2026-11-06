@@ -1,0 +1,404 @@
+#include "CHDecode.h"
+
+#include <arpa/inet.h>
+#include <math.h>
+#include <string.h>
+#include <sys/socket.h>
+
+// MARK: Strings
+
+int64_t ch_read_varuint(const uint8_t *src, size_t src_count, uint64_t *value) {
+    uint64_t result = 0;
+    for (size_t i = 0; i < src_count && i < 10; i++) {
+        uint8_t byte = src[i];
+        result |= (uint64_t)(byte & 0x7F) << (7 * i);
+        if (!(byte & 0x80)) {
+            *value = result;
+            return (int64_t)(i + 1);
+        }
+    }
+    return -1;
+}
+
+int64_t ch_scan_strings(const uint8_t *src, size_t src_count, size_t rows, size_t *chars) {
+    size_t at = 0, total = 0;
+    for (size_t row = 0; row < rows; row++) {
+        // Most strings are shorter than 128 bytes: one length byte.
+        if (at < src_count && src[at] < 0x80) {
+            size_t length = src[at];
+            at += 1;
+            if (length > src_count - at) return -1;
+            at += length;
+            total += length;
+            continue;
+        }
+        uint64_t length;
+        int64_t used = ch_read_varuint(src + at, src_count - at, &length);
+        if (used < 0 || length > (1u << 31)) return -1;
+        at += (size_t)used;
+        if (length > src_count - at) return -1;
+        at += (size_t)length;
+        total += (size_t)length;
+    }
+    *chars = total;
+    return (int64_t)at;
+}
+
+void ch_copy_strings(const uint8_t *src, size_t rows, uint8_t *chars, uint32_t *ends, uint32_t base) {
+    size_t at = 0;
+    uint32_t end = base;
+    uint8_t *out = chars;
+    for (size_t row = 0; row < rows; row++) {
+        size_t length;
+        if (src[at] < 0x80) {
+            length = src[at];
+            at += 1;
+        } else {
+            uint64_t value;
+            at += (size_t)ch_read_varuint(src + at, 10, &value);
+            length = (size_t)value;
+        }
+        // Short strings by 16-byte copies where the input has room; memcpy
+        // of a variable length is a library call that costs more than them.
+        if (length <= 16) {
+            for (size_t i = 0; i < length; i++) out[i] = src[at + i];
+        } else {
+            memcpy(out, src + at, length);
+        }
+        out += length;
+        at += length;
+        end += (uint32_t)length;
+        ends[row] = end;
+    }
+}
+
+// MARK: Numbers
+
+/// A 128- or 256-bit integer (little-endian 64-bit limbs) as a double.
+static double wide_to_double(const uint64_t *limbs, int count, int is_signed) {
+    uint64_t value[4];
+    memcpy(value, limbs, (size_t)count * 8);
+    int negative = is_signed && (value[count - 1] >> 63);
+    if (negative) {
+        // Two's complement: invert and add one.
+        unsigned carry = 1;
+        for (int i = 0; i < count; i++) {
+            value[i] = ~value[i] + carry;
+            carry = carry && value[i] == 0;
+        }
+    }
+    double result = 0;
+    for (int i = count - 1; i >= 0; i--) result = result * 18446744073709551616.0 + (double)value[i];
+    return negative ? -result : result;
+}
+
+void ch_numbers(ch_number_kind kind, const void *src, size_t start, size_t count, double scale, double *dst) {
+#define CONVERT(type) do { \
+        const type *values = (const type *)src + start; \
+        if (scale == 1) { for (size_t i = 0; i < count; i++) dst[i] = (double)values[i]; } \
+        else { for (size_t i = 0; i < count; i++) dst[i] = (double)values[i] * scale; } \
+    } while (0)
+    switch (kind) {
+    case CH_I8: CONVERT(int8_t); break;
+    case CH_U8: CONVERT(uint8_t); break;
+    case CH_I16: CONVERT(int16_t); break;
+    case CH_U16: CONVERT(uint16_t); break;
+    case CH_I32: CONVERT(int32_t); break;
+    case CH_U32: CONVERT(uint32_t); break;
+    case CH_I64: CONVERT(int64_t); break;
+    case CH_U64: CONVERT(uint64_t); break;
+    case CH_F32: CONVERT(float); break;
+    case CH_F64: CONVERT(double); break;
+    case CH_BF16: {
+        const uint16_t *values = (const uint16_t *)src + start;
+        for (size_t i = 0; i < count; i++) {
+            uint32_t bits = (uint32_t)values[i] << 16;
+            float value;
+            memcpy(&value, &bits, 4);
+            dst[i] = (double)value * scale;
+        }
+        break;
+    }
+    case CH_I128: case CH_U128: case CH_I256: case CH_U256: {
+        int limbs = (kind == CH_I128 || kind == CH_U128) ? 2 : 4;
+        int is_signed = kind == CH_I128 || kind == CH_I256;
+        const uint64_t *values = (const uint64_t *)src + start * (size_t)limbs;
+        for (size_t i = 0; i < count; i++) dst[i] = wide_to_double(values + i * (size_t)limbs, limbs, is_signed) * scale;
+        break;
+    }
+    }
+#undef CONVERT
+}
+
+void ch_gather_numbers(const double *dictionary, const uint32_t *indexes, size_t start, size_t count, double *dst) {
+    const uint32_t *at = indexes + start;
+    for (size_t i = 0; i < count; i++) dst[i] = dictionary[at[i]];
+}
+
+void ch_apply_nulls(const uint8_t *nulls, size_t start, size_t count, double *dst) {
+    const uint8_t *at = nulls + start;
+    for (size_t i = 0; i < count; i++) {
+        if (at[i]) dst[i] = NAN;
+    }
+}
+
+// MARK: Text
+
+/// Two digits at a time.
+static const char digit_pairs[201] =
+    "00010203040506070809101112131415161718192021222324252627282930313233343536373839"
+    "40414243444546474849505152535455565758596061626364656667686970717273747576777879"
+    "8081828384858687888990919293949596979899";
+
+/// An unsigned 64-bit number's digits, without leading zeros (at least one).
+static size_t format_u64(uint64_t value, char *out) {
+    char buffer[20];
+    size_t at = 20;
+    while (value >= 100) {
+        uint64_t pair = value % 100;
+        value /= 100;
+        at -= 2;
+        memcpy(buffer + at, digit_pairs + pair * 2, 2);
+    }
+    if (value >= 10) {
+        at -= 2;
+        memcpy(buffer + at, digit_pairs + value * 2, 2);
+    } else {
+        buffer[--at] = (char)('0' + value);
+    }
+    size_t length = 20 - at;
+    memcpy(out, buffer + at, length);
+    return length;
+}
+
+/// A wide unsigned integer's digits (limbs little-endian, changed: divided to 0).
+static size_t format_wide(uint64_t *limbs, int count, char *out) {
+    // Groups of 19 digits, from the lowest, by dividing by 10^19.
+    const uint64_t base = 10000000000000000000ull;
+    uint64_t groups[5];
+    int group_count = 0;
+    for (;;) {
+        int top = count - 1;
+        while (top >= 0 && limbs[top] == 0) top--;
+        if (top < 0) break;
+        __uint128_t remainder = 0;
+        for (int i = top; i >= 0; i--) {
+            __uint128_t current = (remainder << 64) | limbs[i];
+            limbs[i] = (uint64_t)(current / base);
+            remainder = current % base;
+        }
+        groups[group_count++] = (uint64_t)remainder;
+    }
+    if (group_count == 0) {
+        out[0] = '0';
+        return 1;
+    }
+    size_t length = format_u64(groups[group_count - 1], out);
+    for (int i = group_count - 2; i >= 0; i--) {
+        char digits[20];
+        size_t written = format_u64(groups[i], digits);
+        memset(out + length, '0', 19 - written);
+        memcpy(out + length + 19 - written, digits, written);
+        length += 19;
+    }
+    return length;
+}
+
+/// The digits of value `index` and whether it's negative.
+static size_t integer_digits(ch_number_kind kind, const void *src, size_t index, char *out, int *negative) {
+    *negative = 0;
+#define SIGNED(type) do { \
+        int64_t value = ((const type *)src)[index]; \
+        if (value < 0) { *negative = 1; return format_u64((uint64_t)0 - (uint64_t)value, out); } \
+        return format_u64((uint64_t)value, out); \
+    } while (0)
+    switch (kind) {
+    case CH_I8: SIGNED(int8_t);
+    case CH_I16: SIGNED(int16_t);
+    case CH_I32: SIGNED(int32_t);
+    case CH_I64: SIGNED(int64_t);
+    case CH_U8: return format_u64(((const uint8_t *)src)[index], out);
+    case CH_U16: return format_u64(((const uint16_t *)src)[index], out);
+    case CH_U32: return format_u64(((const uint32_t *)src)[index], out);
+    case CH_U64: return format_u64(((const uint64_t *)src)[index], out);
+    case CH_I128: case CH_U128: case CH_I256: case CH_U256: {
+        int count = (kind == CH_I128 || kind == CH_U128) ? 2 : 4;
+        uint64_t limbs[4];
+        memcpy(limbs, (const uint64_t *)src + index * (size_t)count, (size_t)count * 8);
+        if ((kind == CH_I128 || kind == CH_I256) && (limbs[count - 1] >> 63)) {
+            *negative = 1;
+            unsigned carry = 1;
+            for (int i = 0; i < count; i++) {
+                limbs[i] = ~limbs[i] + carry;
+                carry = carry && limbs[i] == 0;
+            }
+        }
+        return format_wide(limbs, count, out);
+    }
+    default:
+        out[0] = '0';
+        return 1;
+    }
+#undef SIGNED
+}
+
+size_t ch_format_integer(ch_number_kind kind, const void *src, size_t index, char *out) {
+    int negative;
+    size_t length = integer_digits(kind, src, index, out + 1, &negative);
+    if (negative) {
+        out[0] = '-';
+        return length + 1;
+    }
+    memmove(out, out + 1, length);
+    return length;
+}
+
+size_t ch_format_decimal(ch_number_kind kind, const void *src, size_t index, int scale, char *out) {
+    char digits[CH_TEXT_CAPACITY];
+    int negative;
+    size_t count = integer_digits(kind, src, index, digits, &negative);
+    size_t at = 0;
+    if (negative) out[at++] = '-';
+    size_t whole = count > (size_t)scale ? count - (size_t)scale : 0;
+    if (whole == 0) {
+        out[at++] = '0';
+    } else {
+        memcpy(out + at, digits, whole);
+        at += whole;
+    }
+    // The fraction's digits, leading zeros added, trailing ones left out.
+    char fraction[CH_TEXT_CAPACITY];
+    size_t fraction_count = 0;
+    for (int i = 0; i < scale; i++) {
+        long position = (long)count - scale + i;
+        fraction[fraction_count++] = position >= 0 ? digits[position] : '0';
+    }
+    while (fraction_count > 0 && fraction[fraction_count - 1] == '0') fraction_count--;
+    if (fraction_count > 0) {
+        out[at++] = '.';
+        memcpy(out + at, fraction, fraction_count);
+        at += fraction_count;
+    }
+    // "-0" only for a zero that isn't one: a negative of all zeros can't be.
+    if (negative && at == 2 && out[1] == '0') {
+        out[0] = '0';
+        return 1;
+    }
+    return at;
+}
+
+/// The civil date of a day since 1970-01-01 (Howard Hinnant's algorithm).
+static void civil_from_days(int64_t days, int64_t *year, unsigned *month, unsigned *day) {
+    days += 719468;
+    int64_t era = (days >= 0 ? days : days - 146096) / 146097;
+    unsigned day_of_era = (unsigned)(days - era * 146097);
+    unsigned year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365;
+    unsigned day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    unsigned shifted_month = (5 * day_of_year + 2) / 153;
+    *day = day_of_year - (153 * shifted_month + 2) / 5 + 1;
+    *month = shifted_month < 10 ? shifted_month + 3 : shifted_month - 9;
+    *year = (int64_t)year_of_era + era * 400 + (*month <= 2);
+}
+
+static size_t format_year(int64_t year, char *out) {
+    size_t at = 0;
+    if (year < 0) {
+        out[at++] = '-';
+        year = -year;
+    }
+    if (year < 10000) {
+        memcpy(out + at, digit_pairs + (year / 100) * 2, 2);
+        memcpy(out + at + 2, digit_pairs + (year % 100) * 2, 2);
+        return at + 4;
+    }
+    return at + format_u64((uint64_t)year, out + at);
+}
+
+size_t ch_format_date(int64_t days, char *out) {
+    int64_t year;
+    unsigned month, day;
+    civil_from_days(days, &year, &month, &day);
+    size_t at = format_year(year, out);
+    out[at] = '-';
+    memcpy(out + at + 1, digit_pairs + month * 2, 2);
+    out[at + 3] = '-';
+    memcpy(out + at + 4, digit_pairs + day * 2, 2);
+    return at + 6;
+}
+
+/// `fraction`'s `precision` digits after a point (nothing for 0).
+static size_t format_fraction(int64_t fraction, int precision, char *out) {
+    if (precision <= 0) return 0;
+    out[0] = '.';
+    for (int i = precision; i >= 1; i--) {
+        out[i] = (char)('0' + fraction % 10);
+        fraction /= 10;
+    }
+    return (size_t)precision + 1;
+}
+
+size_t ch_format_datetime(int64_t seconds, int64_t fraction, int precision, char *out) {
+    int64_t days = seconds >= 0 ? seconds / 86400 : -((-seconds + 86399) / 86400);
+    int64_t of_day = seconds - days * 86400;
+    size_t at = ch_format_date(days, out);
+    out[at] = ' ';
+    memcpy(out + at + 1, digit_pairs + (of_day / 3600) * 2, 2);
+    out[at + 3] = ':';
+    memcpy(out + at + 4, digit_pairs + (of_day / 60 % 60) * 2, 2);
+    out[at + 6] = ':';
+    memcpy(out + at + 7, digit_pairs + (of_day % 60) * 2, 2);
+    at += 9;
+    return at + format_fraction(fraction, precision, out + at);
+}
+
+size_t ch_format_time(int64_t seconds, int64_t fraction, int precision, char *out) {
+    size_t at = 0;
+    if (seconds < 0 || fraction < 0) {
+        out[at++] = '-';
+        seconds = seconds < 0 ? -seconds : seconds;
+        fraction = fraction < 0 ? -fraction : fraction;
+    }
+    uint64_t hours = (uint64_t)seconds / 3600;
+    if (hours < 10) out[at++] = '0';
+    at += format_u64(hours, out + at);
+    out[at] = ':';
+    memcpy(out + at + 1, digit_pairs + (seconds / 60 % 60) * 2, 2);
+    out[at + 3] = ':';
+    memcpy(out + at + 4, digit_pairs + (seconds % 60) * 2, 2);
+    at += 6;
+    return at + format_fraction(fraction, precision, out + at);
+}
+
+size_t ch_format_uuid(const uint8_t *bytes, char *out) {
+    static const char hex[] = "0123456789abcdef";
+    // Native writes each 8-byte half little-endian: the text reads them back to front.
+    uint8_t ordered[16];
+    for (int i = 0; i < 8; i++) {
+        ordered[i] = bytes[7 - i];
+        ordered[8 + i] = bytes[15 - i];
+    }
+    size_t at = 0;
+    for (int i = 0; i < 16; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) out[at++] = '-';
+        out[at++] = hex[ordered[i] >> 4];
+        out[at++] = hex[ordered[i] & 15];
+    }
+    return at;
+}
+
+size_t ch_format_ipv4(uint32_t address, char *out) {
+    size_t at = 0;
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        at += format_u64((address >> shift) & 0xFF, out + at);
+        if (shift > 0) out[at++] = '.';
+    }
+    return at;
+}
+
+size_t ch_format_ipv6(const uint8_t *bytes, char *out) {
+    char text[INET6_ADDRSTRLEN];
+    if (!inet_ntop(AF_INET6, bytes, text, sizeof text)) return 0;
+    size_t length = strlen(text);
+    memcpy(out, text, length);
+    return length;
+}

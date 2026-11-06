@@ -1,0 +1,5 @@
+# Gingham's binary from GitHub, as any app gets it.
+packages:
+  Gingham:
+    url: https://github.com/digitalglobeby/Gingham
+    from: 1.0.1

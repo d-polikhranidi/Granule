@@ -1,0 +1,128 @@
+# Clickhouse Viewer (working name): a viewer of ClickHouse results of any size
+# on Gingham's engine, one native app per platform. Made with XcodeGen:
+# `Tools/generate.sh` (or `GINGHAM_SOURCE=local|release xcodegen`).
+#   local:   Gingham's sources from the repository around this one (../..),
+#            so engine changes show at once (development);
+#   release: Gingham's binary from GitHub, as any app gets it (releases, and
+#            anyone building this repository on its own).
+name: ClickHouseViewer
+include:
+  - path: Gingham-${GINGHAM_SOURCE}.yml
+options:
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  createIntermediateGroups: true
+packages:
+  ClickHouseCore:
+    path: Packages/ClickHouseCore
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: CX4XTQ23ND
+    SWIFT_DEFAULT_ACTOR_ISOLATION: MainActor
+    SWIFT_APPROACHABLE_CONCURRENCY: YES
+    SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+targets:
+  Clickhouse Viewer:
+    type: application
+    platform: macOS
+    sources: [Mac, Shared]
+    dependencies:
+      - package: Gingham
+        product: Gingham
+      - package: ClickHouseCore
+    info:
+      path: Mac/Info.plist
+      properties:
+        CFBundleDisplayName: Clickhouse Viewer
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.developer-tools
+        NSPrincipalClass: NSApplication
+        NSHumanReadableCopyright: "© 2026 Dalis Polikhranidi"
+        ITSAppUsesNonExemptEncryption: false
+        # Servers the user names, over HTTP too (a server on the local
+        # network, a test one): TLS is the user's choice per connection.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+    entitlements:
+      path: Mac/ClickhouseViewer.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        # Export writes where the user picks.
+        com.apple.security.files.user-selected.read-write: true
+    settings:
+      base:
+        PRODUCT_NAME: Clickhouse Viewer
+        PRODUCT_BUNDLE_IDENTIFIER: by.digitalglobe.Clickhouse-Viewer
+        ENABLE_HARDENED_RUNTIME: YES
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+          # Signed to run here, without a profile.
+          CODE_SIGN_IDENTITY: "-"
+        Release:
+          CODE_SIGN_IDENTITY: Apple Development
+  # The iPad and iPhone app: the Mac's bundle id (one App Store record,
+  # Universal Purchase), its own UIKit shell around the same code (Shared).
+  Clickhouse Viewer iOS:
+    type: application
+    platform: iOS
+    sources: [iOS, Shared]
+    dependencies:
+      - package: Gingham
+        product: Gingham
+      - package: ClickHouseCore
+    info:
+      path: iOS/Info.plist
+      properties:
+        CFBundleDisplayName: Clickhouse Viewer
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        ITSAppUsesNonExemptEncryption: false
+        UILaunchScreen: {}
+        CADisableMinimumFrameDurationOnPhone: true
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true
+        NSLocalNetworkUsageDescription: Connects to the ClickHouse servers you add on your local network.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    entitlements:
+      path: iOS/ClickhouseViewer.entitlements
+      properties:
+        # Results of millions of rows: the memory the device can give.
+        com.apple.developer.kernel.increased-memory-limit: true
+    settings:
+      base:
+        PRODUCT_NAME: Clickhouse Viewer
+        PRODUCT_BUNDLE_IDENTIFIER: by.digitalglobe.Clickhouse-Viewer
+        TARGETED_DEVICE_FAMILY: "1,2"
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+schemes:
+  Clickhouse Viewer:
+    build:
+      targets:
+        Clickhouse Viewer: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  Clickhouse Viewer iOS:
+    build:
+      targets:
+        Clickhouse Viewer iOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release

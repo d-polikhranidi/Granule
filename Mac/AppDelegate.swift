@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import ClickHouseCore
 import Gingham
 
@@ -13,6 +14,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
+        // `-ViewerSettings YES`: the Settings window at launch, its number printed.
+        if UserDefaults.standard.bool(forKey: "ViewerSettings") {
+            showSettings(nil)
+            if let number = settings?.window?.windowNumber { FileHandle.standardError.write(Data("VIEWER-WINDOW \(number)\n".utf8)) }
+            return
+        }
         // `-ViewerAppearance dark|light`: the app in that appearance (screenshots of both).
         if let name = UserDefaults.standard.string(forKey: "ViewerAppearance") {
             NSApp.appearance = NSAppearance(named: name == "dark" ? .darkAqua : .aqua)
@@ -57,6 +64,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         connections?.showWindow(sender)
         connections?.window?.makeKeyAndOrderFront(sender)
+    }
+
+    private var settings: SettingsWindowController?
+
+    /// Settings (⌘,): the editor's and the result's appearance.
+    @objc func showSettings(_ sender: Any?) {
+        if settings == nil { settings = SettingsWindowController() }
+        settings?.showWindow(sender)
+        settings?.window?.makeKeyAndOrderFront(sender)
     }
 
     /// The connections window with a new connection in its form.
@@ -114,6 +130,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let name = "Clickhouse Viewer"
         submenu(name, [
             item(String(localized: "About \(name)"), #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            .separator(),
+            item(String(localized: "Settings…"), #selector(showSettings(_:)), ","),
             .separator(),
             item(String(localized: "Hide \(name)"), #selector(NSApplication.hide(_:)), "h"),
             item(String(localized: "Hide Others"), #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
@@ -193,3 +211,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 }
+
+// MARK: - Settings
+
+/// The Settings window: its panes in a preference toolbar (Appearance, for now),
+/// its title the pane's, as the HIG asks.
+final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
+    private static let appearanceItem = NSToolbarItem.Identifier("appearance")
+
+    init() {
+        let hosting = NSHostingController(rootView: AppearanceSettingsView())
+        hosting.sizingOptions = [.preferredContentSize]
+        let window = NSWindow(contentViewController: hosting)
+        window.styleMask = [.titled, .closable]
+        window.title = String(localized: "Appearance")
+        super.init(window: window)
+        let toolbar = NSToolbar(identifier: "Settings")
+        toolbar.delegate = self
+        toolbar.selectedItemIdentifier = Self.appearanceItem
+        window.toolbar = toolbar
+        window.toolbarStyle = .preference
+        window.setFrameAutosaveName("Settings")
+        if !window.setFrameUsingName("Settings") { window.center() }
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.appearanceItem] }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.appearanceItem] }
+    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.appearanceItem] }
+
+    func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
+                 willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        let item = NSToolbarItem(itemIdentifier: identifier)
+        item.label = String(localized: "Appearance")
+        item.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: item.label)
+        return item
+    }
+}
+
+/// Settings > Appearance. The windows follow the system's Light, Dark or Auto;
+/// here are the editor's and the result's own looks.
+struct AppearanceSettingsView: View {
+    @AppStorage("EditorTheme") private var theme = EditorTheme.standard.rawValue
+    @AppStorage("EditorFontSize") private var editorFontSize = 13.0
+    @AppStorage("ResultFontSize") private var resultFontSize = 0.0
+    @AppStorage("ResultDensity") private var density = "regular"
+    @AppStorage("ResultAlternatingRows") private var alternatingRows = true
+    @AppStorage("DarkContentBackground") private var darkContent = false
+
+    private static let sample = "SELECT country, count() AS visits -- this month\nFROM events\nWHERE event_time >= {since:DateTime} AND url LIKE '%/page/%'\nGROUP BY country ORDER BY visits DESC LIMIT 10"
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(isOn: $darkContent) {
+                    Text("Dark background for the editor and results")
+                    Text("The windows themselves follow System Settings › Appearance (Light, Dark or Auto).")
+                }
+            }
+            Section("Editor") {
+                Picker("Theme", selection: $theme) {
+                    ForEach(EditorTheme.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+                }
+                Stepper(value: $editorFontSize, in: 10...24, step: 1) {
+                    LabeledContent("Font size", value: String(localized: "\(Int(editorFontSize)) pt"))
+                }
+                preview
+            }
+            Section("Results") {
+                Picker("Text size", selection: $resultFontSize) {
+                    Text("System").tag(0.0)
+                    ForEach([11.0, 12, 13, 14, 15, 16, 18], id: \.self) { Text(String(localized: "\(Int($0)) pt")).tag($0) }
+                }
+                Picker("Rows", selection: $density) {
+                    Text("Compact").tag("compact")
+                    Text("Regular").tag("regular")
+                    Text("Spacious").tag("spacious")
+                }
+                .pickerStyle(.segmented)
+                Toggle("Alternating row backgrounds", isOn: $alternatingRows)
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 560)
+        .fixedSize(horizontal: false, vertical: true)
+        .onChange(of: theme) { changed() }
+        .onChange(of: editorFontSize) { changed() }
+        .onChange(of: resultFontSize) { changed() }
+        .onChange(of: density) { changed() }
+        .onChange(of: alternatingRows) { changed() }
+        .onChange(of: darkContent) { changed() }
+    }
+
+    /// The theme on a statement, as the editor will show it.
+    private var preview: some View {
+        let storage = NSTextStorage(string: Self.sample)
+        SQLHighlighting.apply(to: storage)
+        let background = EditorTheme(rawValue: theme)?.background
+        return Text(AttributedString(storage))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(background.map { Color(nsColor: $0) } ?? Color(nsColor: .textBackgroundColor), in: .rect(cornerRadius: 6))
+            .environment(\.colorScheme, darkContent ? .dark : (NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? .dark : .light))
+            .id("\(theme)\(editorFontSize)\(darkContent)")
+    }
+
+    private func changed() {
+        NotificationCenter.default.post(name: AppearanceSettings.didChange, object: nil)
+    }
+}
+

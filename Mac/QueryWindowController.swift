@@ -30,6 +30,9 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     private let editor = SQLTextView()
     private let textOutput = NSTextView()
     private let planOutline = PlanOutline()
+    /// Explain Pipeline: the processors and their streams, drawn.
+    private let pipelineCanvas = PipelineCanvas(frame: .zero)
+    private let pipelineScroll = NSScrollView()
     /// The result as a chart (View > Show Chart), its columns in the bar above it.
     private let chart = ChartController()
     private let chartBar = NSStackView()
@@ -175,7 +178,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         let results = NSView()
         planOutline.isHidden = true
         chart.view.isHidden = true
-        for view in [table, textScroll!, planOutline, chart.view] as [NSView] {
+        pipelineScroll.documentView = pipelineCanvas
+        pipelineScroll.hasVerticalScroller = true
+        pipelineScroll.hasHorizontalScroller = true
+        pipelineScroll.isHidden = true
+        for view in [table, textScroll!, planOutline, chart.view, pipelineScroll] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             results.addSubview(view)
             NSLayoutConstraint.activate([
@@ -309,6 +316,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 }
                 // `-ViewerChart YES`: the result as a chart.
                 if UserDefaults.standard.bool(forKey: "ViewerChart") { toggleChart(nil) }
+                // `-ViewerPipeline <SQL>`: its pipeline drawn.
+                if let sql = UserDefaults.standard.string(forKey: "ViewerPipeline") {
+                    editor.string = sql
+                    showPipeline(of: sql)
+                }
                 // `-ViewerPlan <SQL>`: its plan shown (Explain Plan).
                 if let sql = UserDefaults.standard.string(forKey: "ViewerPlan") {
                     editor.string = sql
@@ -395,7 +407,9 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         guard let sql = currentStatement() else { return }
         let kind = (sender as? NSMenuItem)?.tag ?? 0
         if kind == 0 { return showPlan(of: sql) }
+        if kind == 1 { return showPipeline(of: sql) }
         let explain = switch kind {
+        case 5: "EXPLAIN PIPELINE \(sql) FORMAT TSVRaw"
         case 4: "EXPLAIN PLAN indexes = 1 \(sql) FORMAT TSVRaw"
         case 1: "EXPLAIN PIPELINE \(sql) FORMAT TSVRaw"
         case 2: "EXPLAIN ESTIMATE \(sql)"
@@ -403,6 +417,24 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         default: "EXPLAIN PLAN indexes = 1 \(sql) FORMAT TSVRaw"
         }
         run(explain)
+    }
+
+    /// Explain Pipeline: its processors and streams drawn in the result's place.
+    private func showPipeline(of sql: String) {
+        statusLabel.stringValue = String(localized: "Explaining…")
+        messageLabel.isHidden = true
+        Task {
+            do {
+                let pipeline = try await client.pipeline(of: sql)
+                pipelineCanvas.layout = PipelineLayout(pipeline)
+                for view in [table, textScroll!, planOutline, chart.view] as [NSView] { view.isHidden = true }
+                pipelineScroll.isHidden = false
+                statusLabel.stringValue = String(localized: "The pipeline, not run: \(pipeline.nodes.count) processors")
+            } catch {
+                show(error)
+                statusLabel.stringValue = ""
+            }
+        }
     }
 
     /// Explain Plan: the plan's steps as an outline in the result's place,
@@ -414,6 +446,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             do {
                 let plan = try await client.plan(of: sql)
                 planOutline.show(plan)
+                pipelineScroll.isHidden = true
+                chart.view.isHidden = true
                 table.isHidden = true
                 textScroll.isHidden = true
                 planOutline.isHidden = false
@@ -516,6 +550,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     /// A statement's text output in place of the table (`nil`: the table, or the chart, again).
     private func showText(_ text: String?) {
         planOutline.isHidden = true
+        pipelineScroll.isHidden = true
         textScroll.isHidden = text == nil
         table.isHidden = text != nil || isShowingChart
         chart.view.isHidden = text != nil || !isShowingChart
@@ -533,6 +568,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     @objc func toggleChart(_ sender: Any?) {
         isShowingChart.toggle()
         planOutline.isHidden = true
+        pipelineScroll.isHidden = true
         textScroll.isHidden = true
         table.isHidden = isShowingChart
         chart.view.isHidden = !isShowingChart

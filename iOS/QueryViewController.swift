@@ -273,6 +273,33 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         }
     }
 
+    /// Explain Pipeline: its processors and streams drawn, in a sheet.
+    private func showPipeline(of sql: String) {
+        statusLabel.text = String(localized: "Explaining…")
+        Task {
+            do {
+                let pipeline = try await client.pipeline(of: sql)
+                statusLabel.text = String(localized: "The pipeline, not run: \(pipeline.nodes.count) processors")
+                let controller = UIViewController()
+                controller.title = String(localized: "Pipeline")
+                let scroll = UIScrollView()
+                let canvas = PipelineCanvas(frame: .zero)
+                canvas.backgroundColor = .systemBackground
+                canvas.layout = PipelineLayout(pipeline)
+                scroll.addSubview(canvas)
+                scroll.contentSize = canvas.layout.size
+                scroll.backgroundColor = .systemBackground
+                controller.view = scroll
+                controller.navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak controller] _ in
+                    controller?.dismiss(animated: true)
+                })
+                present(UINavigationController(rootViewController: controller), animated: true)
+            } catch {
+                show(error)
+            }
+        }
+    }
+
     /// The selection, or the statement at the cursor (without its semicolon).
     private func currentStatement() -> String? {
         let text = editor.text as NSString
@@ -575,13 +602,17 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             guard let self, let sql = currentStatement() else { return }
             showPlan(of: sql)
         }
+        let pipeline = UIAction(title: String(localized: "Explain Pipeline")) { [weak self] _ in
+            guard let self, let sql = currentStatement() else { return }
+            showPipeline(of: sql)
+        }
         let explains: [(String, String)] = [
             (String(localized: "Explain Plan as Text"), "EXPLAIN PLAN indexes = 1 %@ FORMAT TSVRaw"),
-            (String(localized: "Explain Pipeline"), "EXPLAIN PIPELINE %@ FORMAT TSVRaw"),
+            (String(localized: "Explain Pipeline as Text"), "EXPLAIN PIPELINE %@ FORMAT TSVRaw"),
             (String(localized: "Explain Estimate"), "EXPLAIN ESTIMATE %@"),
             (String(localized: "Explain Syntax"), "EXPLAIN SYNTAX %@ FORMAT TSVRaw"),
         ]
-        let explain = UIMenu(title: String(localized: "Explain"), image: UIImage(systemName: "list.bullet.indent"), children: [plan] + explains.map { title, form in
+        let explain = UIMenu(title: String(localized: "Explain"), image: UIImage(systemName: "list.bullet.indent"), children: [plan, pipeline] + explains.map { title, form in
             UIAction(title: title) { [weak self] _ in
                 guard let self, let sql = currentStatement() else { return }
                 run(form.replacingOccurrences(of: "%@", with: sql))

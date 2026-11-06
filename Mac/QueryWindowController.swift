@@ -61,7 +61,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         self.endpoint = endpoint
         self.password = password
         self.tabNumber = tabNumber
-        client = CHClient(endpoint: endpoint, password: password)
+        client = CHClient(endpoint: endpoint, password: password, identity: Connections.shared.clientIdentity(for: endpoint))
         history = QueryHistory(endpoint: endpoint)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
                               styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],

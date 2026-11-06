@@ -290,3 +290,40 @@ struct CHReadonlyUserTests {
         #expect(try String(contentsOf: file, encoding: .utf8) == "0\n1\n2\n")
     }
 }
+
+/// A server that wants a client certificate: `CH_TLS_URL` (https://localhost:18443),
+/// `CH_TLS_DIR` with ca.crt and client.p12 (password "viewer").
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["CH_TLS_URL"] != nil, "CH_TLS_URL names no server"), .serialized)
+struct CHClientCertificateTests {
+    static func endpoint() throws -> CHEndpoint {
+        let environment = ProcessInfo.processInfo.environment
+        var endpoint = try #require(CHEndpoint.parse(environment["CH_TLS_URL"] ?? "")).endpoint
+        let pem = try String(contentsOfFile: (environment["CH_TLS_DIR"] ?? "") + "/ca.crt", encoding: .utf8)
+        let der = Data(base64Encoded: pem.components(separatedBy: .newlines).filter { !$0.hasPrefix("-----") }.joined())!
+        endpoint.trust = .authority(der)
+        return endpoint
+    }
+
+    static func identity(password: String = "viewer") throws -> CHClientIdentity {
+        let data = try Data(contentsOf: URL(fileURLWithPath: (ProcessInfo.processInfo.environment["CH_TLS_DIR"] ?? "") + "/client.p12"))
+        return try CHClientIdentity(pkcs12: data, password: password)
+    }
+
+    @Test func aClientCertificateIsGiven() async throws {
+        let identity = try Self.identity()
+        #expect(identity.summary == "viewer-client")
+        let client = CHClient(endpoint: try Self.endpoint(), password: "viewer", identity: identity)
+        try await client.connect(timeout: 10)
+        let result = try await client.result("SELECT number FROM numbers(100000)")
+        #expect(result.rowCount == 100_000)
+        let file = FileManager.default.temporaryDirectory.appending(path: "chviewer-mtls-\(UUID().uuidString).csv")
+        defer { try? FileManager.default.removeItem(at: file) }
+        #expect(try await client.download("SELECT 1", format: "CSV", to: file) == 2)
+    }
+
+    @Test func noCertificateNoConnection() async throws {
+        let client = CHClient(endpoint: try Self.endpoint(), password: "viewer")
+        await #expect(throws: (any Error).self) { try await client.connect(timeout: 10) }
+        #expect(throws: CHClientIdentity.Failure.wrongPassword) { try Self.identity(password: "wrong") }
+    }
+}

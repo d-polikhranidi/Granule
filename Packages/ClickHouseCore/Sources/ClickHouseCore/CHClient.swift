@@ -74,10 +74,14 @@ public final class CHClient: Sendable {
     private let session: URLSession
     private let sessionDelegate: CHTrustDelegate
 
-    public init(endpoint: CHEndpoint, password: String) {
+    /// The client certificate given to servers that ask for one.
+    let identity: CHClientIdentity?
+
+    public init(endpoint: CHEndpoint, password: String, identity: CHClientIdentity? = nil) {
         self.endpoint = endpoint
         self.password = password
-        sessionDelegate = CHTrustDelegate(trust: endpoint.trust)
+        self.identity = identity
+        sessionDelegate = CHTrustDelegate(trust: endpoint.trust, identity: identity, hostname: nil)
         session = URLSession(configuration: Self.configuration(timeout: 60), delegate: sessionDelegate, delegateQueue: nil)
     }
 
@@ -217,7 +221,7 @@ public final class CHClient: Sendable {
             request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
             let reader = CHStreamReader(queryID: options.queryID, maxRows: options.maxRows, maxBytes: options.maxBytes,
                                         compressed: endpoint.compressesResults, jsonAsText: readsJSONAsText, continuation: continuation)
-            let delegate = CHQueryDelegate(trust: endpoint.trust, reader: reader)
+            let delegate = CHQueryDelegate(trust: endpoint.trust, identity: identity, hostname: nil, reader: reader)
             // A session of its own: its results are read on its own queue.
             let queue = OperationQueue()
             queue.maxConcurrentOperationCount = 1
@@ -274,7 +278,7 @@ public final class CHClient: Sendable {
         let holder = CHLocked<URLSessionDataTask?>(nil)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                let delegate = CHDownloadDelegate(trust: trust, handle: handle, progress: progress, continuation: continuation)
+                let delegate = CHDownloadDelegate(trust: trust, identity: self.identity, handle: handle, progress: progress, continuation: continuation)
                 let session = URLSession(configuration: Self.configuration(timeout: 3600), delegate: delegate, delegateQueue: nil)
                 let task = session.dataTask(with: request)
                 holder.value = task
@@ -357,17 +361,20 @@ final class CHLocked<Value>: @unchecked Sendable {
     func withLock<Result>(_ body: (inout Value) -> Result) -> Result { lock.withLock { body(&stored) } }
 }
 
-/// Answers the server's TLS challenge by the endpoint's trust.
-final class CHTrustDelegate: NSObject, URLSessionDelegate, Sendable {
+/// Answers the server's TLS challenges by the endpoint's trust and our client certificate.
+final class CHTrustDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     let trust: CHTrust
+    let identity: CHClientIdentity?
+    let hostname: String?
 
-    init(trust: CHTrust) { self.trust = trust }
+    init(trust: CHTrust, identity: CHClientIdentity?, hostname: String?) {
+        self.trust = trust
+        self.identity = identity
+        self.hostname = hostname
+    }
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge) async
         -> (URLSession.AuthChallengeDisposition, URLCredential?) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let serverTrust = challenge.protectionSpace.serverTrust else { return (.performDefaultHandling, nil) }
-        if case .system = trust { return (.performDefaultHandling, nil) }
-        return trust.evaluate(serverTrust) ? (.useCredential, URLCredential(trust: serverTrust)) : (.cancelAuthenticationChallenge, nil)
+        CHAuthentication.answer(challenge, trust: trust, identity: identity, hostname: hostname)
     }
 }

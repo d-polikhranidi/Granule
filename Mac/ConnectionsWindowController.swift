@@ -20,6 +20,9 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
     private let compressionPopUp = NSPopUpButton()
     private let trustPopUp = NSPopUpButton()
     private let fingerprintField = NSTextField()
+    private let certificateLabel = NSTextField(labelWithString: "")
+    private let certificateButton = NSButton(title: String(localized: "Choose…"), target: nil, action: nil)
+    private let certificateRemove = NSButton(title: String(localized: "Remove"), target: nil, action: nil)
     private let statusLabel = NSTextField(wrappingLabelWithString: "")
     private let connectButton = NSButton(title: String(localized: "Connect"), target: nil, action: nil)
     private let testButton = NSButton(title: String(localized: "Test"), target: nil, action: nil)
@@ -92,6 +95,12 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         fingerprintField.placeholderString = String(localized: "SHA-256 of the server's certificate")
         secureBox.target = self
         secureBox.action = #selector(secureChanged(_:))
+        certificateLabel.textColor = .secondaryLabelColor
+        certificateLabel.lineBreakMode = .byTruncatingMiddle
+        certificateButton.target = self
+        certificateButton.action = #selector(chooseCertificate(_:))
+        certificateRemove.target = self
+        certificateRemove.action = #selector(removeCertificate(_:))
         statusLabel.textColor = .secondaryLabelColor
         connectButton.keyEquivalent = "\r"
         connectButton.target = self
@@ -120,6 +129,7 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
             [label(String(localized: "Compression:")), compressionPopUp],
             [label(String(localized: "Certificate:")), trustPopUp],
             [NSGridCell.emptyContentView, fingerprintField],
+            [label(String(localized: "Client certificate:")), NSStackView(views: [certificateLabel, certificateButton, certificateRemove])],
         ])
         grid.column(at: 0).xPlacement = .trailing
         grid.rowSpacing = 8
@@ -234,7 +244,52 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
             fingerprintField.stringValue = String(localized: "An authority chosen (\(data.count) bytes)")
         }
         trustChanged(nil)
+        showCertificate(endpoint.clientCertificate)
         statusLabel.stringValue = ""
+    }
+
+    private func showCertificate(_ name: String?) {
+        certificateLabel.stringValue = name ?? String(localized: "None (for servers that ask for one: mTLS)")
+        certificateRemove.isHidden = name == nil
+    }
+
+    /// A PKCS#12 file (.p12, .pfx) with the client's certificate and key, and its password.
+    @objc private func chooseCertificate(_ sender: Any?) {
+        guard var endpoint = selected, let window else { return }
+        let panel = NSOpenPanel()
+        panel.message = String(localized: "The client certificate and its key, as a PKCS#12 file (.p12, .pfx)")
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .OK, let url = panel.url, let data = try? Data(contentsOf: url) else { return }
+            let alert = NSAlert()
+            alert.messageText = String(localized: "The password of \(url.lastPathComponent)")
+            let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+            alert.accessoryView = field
+            alert.addButton(withTitle: String(localized: "OK"))
+            alert.addButton(withTitle: String(localized: "Cancel"))
+            alert.window.initialFirstResponder = field
+            alert.beginSheetModal(for: window) { response in
+                guard response == .alertFirstButtonReturn else { return }
+                do {
+                    let name = try Connections.storeClientCertificate(data, password: field.stringValue, for: endpoint.id)
+                    endpoint = self.edited ?? endpoint
+                    endpoint.clientCertificate = name
+                    Connections.shared.save(endpoint, password: self.passwordField.stringValue)
+                    self.showCertificate(name)
+                } catch {
+                    self.statusLabel.stringValue = (error as? CHClientIdentity.Failure) == .wrongPassword
+                        ? String(localized: "The file's password is wrong.") : String(localized: "The file isn't a PKCS#12 certificate with its key.")
+                    self.statusLabel.textColor = .systemRed
+                }
+            }
+        }
+    }
+
+    @objc private func removeCertificate(_ sender: Any?) {
+        guard var endpoint = edited else { return }
+        Connections.removeClientCertificate(for: endpoint.id)
+        endpoint.clientCertificate = nil
+        Connections.shared.save(endpoint, password: passwordField.stringValue)
+        showCertificate(nil)
     }
 
     /// The form as an endpoint (the selected one's id).
@@ -248,6 +303,7 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         endpoint.database = databaseField.stringValue.trimmingCharacters(in: .whitespaces)
         endpoint.isReadOnly = readOnlyBox.state == .on
         endpoint.compression = CHCompression.allCases[max(0, compressionPopUp.indexOfSelectedItem)]
+        endpoint.clientCertificate = selected?.clientCertificate
         switch trustPopUp.indexOfSelectedItem {
         case 1: endpoint.trust = .pinned(fingerprintField.stringValue)
         case 2: endpoint.trust = authority.map(CHTrust.authority) ?? .system
@@ -313,7 +369,7 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         guard let endpoint = save() else { return }
         statusLabel.stringValue = String(localized: "Connecting…")
         statusLabel.textColor = .secondaryLabelColor
-        let client = CHClient(endpoint: endpoint, password: passwordField.stringValue)
+        let client = CHClient(endpoint: endpoint, password: passwordField.stringValue, identity: Connections.shared.clientIdentity(for: endpoint))
         Task {
             do {
                 let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 15)

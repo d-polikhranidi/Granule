@@ -27,6 +27,9 @@ public struct CHEndpoint: Codable, Sendable, Hashable, Identifiable {
     public var ssh: CHSSHBastion?
     /// What the server is for, shown by its color (production in red), or none.
     public var environment: CHEnvironment?
+    /// The name was made for it (New server, the host's), not typed: the form
+    /// shows it as the field's prompt, so typing starts a name of one's own.
+    public var nameIsSuggested: Bool?
 
     public init(id: UUID = UUID(), name: String = "", host: String = "localhost", port: Int = 8123, isSecure: Bool = false,
                 user: String = "default", database: String = "", isReadOnly: Bool = false, trust: CHTrust = .system,

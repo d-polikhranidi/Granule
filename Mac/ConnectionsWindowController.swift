@@ -38,7 +38,9 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
             reloadList()
         }
         if endpoints.isEmpty {
-            Connections.shared.save(CHEndpoint(name: String(localized: "Local server")), password: "")
+            var local = CHEndpoint(name: String(localized: "Local server"))
+            local.nameIsSuggested = true
+            Connections.shared.save(local, password: "")
         }
         list.reloadData()
         list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
@@ -60,6 +62,20 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
                 window.setFrame(NSRect(x: screen.visibleFrame.minX + 40, y: screen.visibleFrame.minY, width: 860, height: screen.visibleFrame.height), display: true)
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { FileHandle.standardError.write(Data("VIEWER-WINDOW \(window.windowNumber)\n".utf8)) }
+            // `-ViewerMenu environment`: the Environment menu opened too (its window captured from outside).
+            if UserDefaults.standard.string(forKey: "ViewerMenu") == "environment" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    // SwiftUI builds its accessibility tree only for a client like VoiceOver: clicked where the
+                    // picker is in this layout (the Environment row, its chevrons at the form's trailing edge).
+                    let point = NSPoint(x: window.frame.width - 42, y: window.frame.height - 244)
+                    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+                        if let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                                                          windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) {
+                            NSApp.postEvent(event, atStart: false)
+                        }
+                    }
+                }
+            }
         }
         #endif
     }
@@ -244,7 +260,8 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
 
     @objc func addConnection(_ sender: Any?) {
         save()
-        let endpoint = CHEndpoint(name: String(localized: "New server"))
+        var endpoint = CHEndpoint(name: Connections.shared.suggestedName(host: "", except: nil))
+        endpoint.nameIsSuggested = true
         Connections.shared.save(endpoint, password: "")
         select(endpoint.id)
         form.focusURL += 1
@@ -255,7 +272,8 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         guard let original = targetEndpoint else { return }
         var copy = original
         copy.id = UUID()
-        copy.name = String(localized: "\(original.title) copy")
+        copy.name = Connections.shared.uniqueName(String(localized: "\(original.title) copy"), except: copy.id)
+        copy.nameIsSuggested = nil
         Connections.shared.save(copy, password: Connections.shared.password(for: original))
         Connections.setSSHSecret(Connections.shared.sshSecret(for: original), for: copy.id)
         for suffix in [".p12", ".p12-password"] {
@@ -302,7 +320,14 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         }
         form.id = endpoint.id
         form.url = ""
-        form.name = endpoint.name
+        // A name made for it shows as the field's prompt: typing starts one of one's own.
+        if endpoint.nameIsSuggested == true {
+            form.name = ""
+            form.namePrompt = endpoint.name
+        } else {
+            form.name = endpoint.name
+            form.namePrompt = Connections.shared.suggestedName(host: endpoint.host, except: endpoint.id)
+        }
         form.environment = endpoint.environment
         form.isReadOnly = endpoint.isReadOnly
         form.host = endpoint.host
@@ -341,7 +366,15 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
     /// The form as the connection it shows.
     private var edited: CHEndpoint? {
         guard var endpoint = shown else { return nil }
-        endpoint.name = form.name.trimmingCharacters(in: .whitespaces)
+        // No two connections of one name: a number is added to a name taken.
+        let typed = form.name.trimmingCharacters(in: .whitespaces)
+        if typed.isEmpty {
+            endpoint.name = Connections.shared.uniqueName(form.namePrompt, except: endpoint.id)
+            endpoint.nameIsSuggested = true
+        } else {
+            endpoint.name = Connections.shared.uniqueName(typed, except: endpoint.id)
+            endpoint.nameIsSuggested = nil
+        }
         endpoint.environment = form.environment
         endpoint.host = form.host.trimmingCharacters(in: .whitespaces)
         endpoint.isSecure = form.isSecure
@@ -378,6 +411,10 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         guard let endpoint = edited else { return nil }
         isSaving = true
         Connections.shared.save(endpoint, password: form.password)
+        // A typed name that was taken now has its number: the field says so.
+        if endpoint.nameIsSuggested == nil, endpoint.name != form.name.trimmingCharacters(in: .whitespaces) {
+            form.name = endpoint.name
+        }
         // The bastion's secret: none without one, its password, or the key chosen.
         if endpoint.ssh == nil {
             Connections.setSSHSecret("", for: endpoint.id)
@@ -570,6 +607,14 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         try? await Task.sleep(for: .seconds(1))
         FileHandle.standardError.write(Data("VIEWER-WINDOW \(window.windowNumber)\n".utf8))
         addConnection(nil)
+        check("a new connection's name is the field's prompt, the field empty", form.name.isEmpty && form.namePrompt == String(localized: "New server"))
+        form.name = "Local server"
+        check("a name taken is said", form.nameIsTaken)
+        save()
+        check("and gets a number when saved", form.name == "Local server 2" && shown?.name == "Local server 2" && !form.nameIsTaken)
+        form.name = ""
+        save()
+        check("no name typed: New server", shown?.name == String(localized: "New server") && shown?.nameIsSuggested == true)
         form.url = "http://default:wrong@localhost:18123"
         form.applyURL()
         test(nil)
@@ -685,6 +730,8 @@ final class ConnectionForm {
     var isAttempting = false
     /// Bumped to put the cursor in the URL field (a new connection).
     var focusURL = 0
+    /// The name the connection gets if none is typed (New server, the host's).
+    var namePrompt = ""
     var actions = Actions()
 
     var statusSummary: String { status.firstParagraph }
@@ -716,9 +763,35 @@ final class ConnectionForm {
         user = endpoint.user
         database = endpoint.database
         if let password { self.password = password }
-        if name.isEmpty || name == String(localized: "New server") {
-            name = endpoint.isCloud ? String(endpoint.host.prefix { $0 != "." }) : endpoint.host
+        // Without a name of one's own, the host's is suggested (the field's prompt).
+        if name.trimmingCharacters(in: .whitespaces).isEmpty {
+            namePrompt = Connections.shared.suggestedName(host: endpoint.host, except: id)
         }
+    }
+
+    /// Whether another connection has the name typed (a number will be added to this one's).
+    var nameIsTaken: Bool {
+        let typed = name.trimmingCharacters(in: .whitespaces)
+        return !typed.isEmpty && Connections.shared.isNameTaken(typed, except: id)
+    }
+
+    /// An environment's mark in menus: drawn in its color (a menu draws symbols in one color).
+    static func dot(_ color: NSColor?) -> NSImage {
+        let image = NSImage(size: NSSize(width: 9, height: 9), flipped: false) { rect in
+            if let color {
+                color.setFill()
+                NSBezierPath(ovalIn: rect).fill()
+            } else {
+                // No environment: a ring, so the titles stay in one column in the menu.
+                NSColor.tertiaryLabelColor.setStroke()
+                let ring = NSBezierPath(ovalIn: rect.insetBy(dx: 0.75, dy: 0.75))
+                ring.lineWidth = 1.5
+                ring.stroke()
+            }
+            return true
+        }
+        image.isTemplate = false
+        return image
     }
 
     /// A host key's type and the end of its base64, enough to tell keys apart.
@@ -754,22 +827,37 @@ struct ConnectionFormView: View {
                     } footer: {
                         Text("A URL pasted here fills in the fields below.").foregroundStyle(.secondary)
                     }
-                    Section("Connection") {
-                        TextField("Name", text: $form.name)
+                    Section {
+                        TextField("Name", text: $form.name, prompt: Text(form.namePrompt))
                         Picker("Environment", selection: $form.environment) {
-                            Text("None").tag(CHEnvironment?.none)
+                            // The picker's bezel leaves more room before an icon (15 pt) than after its chevrons
+                            // (9 pt): the labels give 6 back, so both sides are even.
+                            Label {
+                                Text("None")
+                            } icon: {
+                                Image(nsImage: ConnectionForm.dot(nil)).renderingMode(.original)
+                            }
+                            .padding(.leading, -6)
+                            .tag(CHEnvironment?.none)
                             ForEach(CHEnvironment.allCases, id: \.self) { environment in
                                 Label {
                                     Text(environment.title)
                                 } icon: {
-                                    Image(systemName: "circle.fill").foregroundStyle(Color(nsColor: environment.color))
+                                    Image(nsImage: ConnectionForm.dot(environment.color)).renderingMode(.original)
                                 }
+                                .padding(.leading, -6)
                                 .tag(Optional(environment))
                             }
                         }
                         Toggle(isOn: $form.isReadOnly) {
                             Text("Read only")
                             Text("Runs no statements that change data.")
+                        }
+                    } header: {
+                        Text("Connection")
+                    } footer: {
+                        if form.nameIsTaken {
+                            Text("Another connection has this name: a number will be added to this one.").foregroundStyle(.red)
                         }
                     }
                     Section("Server") {

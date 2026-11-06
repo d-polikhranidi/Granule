@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `-ViewerURL <url>`: a window on that server at launch (not saved); `-ViewerRun <SQL>` run in it.
         if let url = UserDefaults.standard.string(forKey: "ViewerURL"), var (endpoint, password) = CHEndpoint.parse(url) {
             Connections.debugBastion(for: &endpoint)
+            // `-ViewerEnvironment production`: that server's environment (its tag and tint).
+            endpoint.environment = UserDefaults.standard.string(forKey: "ViewerEnvironment").flatMap(CHEnvironment.init(rawValue:))
             let controller = QueryWindowController(endpoint: endpoint, password: password ?? "")
             controller.onNewTab = { [weak self] from in self?.open(from.endpoint, password: from.password, tabOf: from) }
             queryWindows.append(controller)

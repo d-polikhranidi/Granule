@@ -397,6 +397,28 @@ final class QueryController {
     // MARK: Status
 
     /// What the window says: rows (found), how long, how much, sorting, or the error.
+    /// What the window is doing, in short (the toolbar's indicator): the whole is `status`.
+    var briefStatus: String {
+        let rows = source?.result.rowCount ?? 0
+        switch state {
+        case .idle:
+            return ""
+        case .running(let started):
+            let seconds = Self.seconds(ContinuousClock.now - started).formatted(.number.precision(.fractionLength(1)))
+            return rows > 0 ? String(localized: "Running · \(rows.formatted()) rows · \(seconds) s") : String(localized: "Running · \(seconds) s")
+        case .finished(let stats):
+            let seconds = Self.seconds(stats.elapsed).formatted(.number.precision(.fractionLength(2)))
+            return "\(rowsText(rows)) · \(seconds) s"
+        case .failed:
+            return String(localized: "Failed")
+        case .cancelled:
+            return String(localized: "Cancelled")
+        }
+    }
+
+    /// How far a running query has read, when the server knows how much it will (0…1).
+    var progressFraction: Double? { isRunning ? progress?.fraction : nil }
+
     var status: String {
         let rows = source?.result.rowCount ?? 0
         var parts: [String] = []

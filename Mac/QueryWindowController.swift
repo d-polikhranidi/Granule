@@ -47,6 +47,9 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     private let detailsPicker = NSSegmentedControl(labels: TableDetail.allCases.map(\.title), trackingMode: .selectOne, target: nil, action: nil)
     private var detailsTable: Schema.Table?
     private var textScroll: NSScrollView!
+    private let editorScroll = NSScrollView()
+    /// Where the result shows (the table, a text, a plan, a chart).
+    private let resultsView = NSView()
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
     /// The toolbar's middle: the server and what the window is doing.
@@ -154,7 +157,6 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
 
     private func buildPane() -> NSView {
         // The editor.
-        let editorScroll = NSScrollView()
         editorScroll.hasVerticalScroller = true
         editorScroll.documentView = editor
         editor.minSize = NSSize(width: 0, height: 0)
@@ -194,7 +196,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         statusLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         statusLabel.lineBreakMode = .byTruncatingTail
 
-        let results = NSView()
+        let results = resultsView
         planOutline.isHidden = true
         chart.view.isHidden = true
         pipelineScroll.documentView = pipelineCanvas
@@ -287,12 +289,9 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             let height = split.arrangedSubviews[0].frame.height
             if height < 120 || height > split.bounds.height * 0.6 { split.setPosition(220, ofDividerAt: 0) }
         }
-        // A production server's editor is tinted, so its statements aren't taken for a test one's.
-        if endpoint.environment == .production {
-            editor.backgroundColor = NSColor(name: nil) { appearance in
-                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                    ? NSColor(srgbRed: 0.24, green: 0.13, blue: 0.13, alpha: 1) : NSColor(srgbRed: 1, green: 0.955, blue: 0.95, alpha: 1)
-            }
+        applyAppearance()
+        NotificationCenter.default.addObserver(forName: AppearanceSettings.didChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.applyAppearance() }
         }
         guard #available(macOS 26.0, *) else { return split }
         // Above the status accessory: the table doesn't read safe areas, so it ends where they begin.
@@ -306,6 +305,41 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             split.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.bottomAnchor),
         ])
         return container
+    }
+
+    /// Settings > Appearance on the editor and the result: the theme and sizes, dark
+    /// backgrounds, and a production server's tint (it wins over the theme's background).
+    private func applyAppearance() {
+        if let storage = editor.textStorage {
+            let selection = editor.selectedRanges
+            SQLHighlighting.apply(to: storage, problems: underlined)
+            editor.selectedRanges = selection
+        }
+        textOutput.font = SQLHighlighting.font
+        let dark = AppearanceSettings.darkContent ? NSAppearance(named: .darkAqua) : nil
+        editorScroll.appearance = dark
+        resultsView.appearance = dark
+        if endpoint.environment == .production {
+            // So its statements aren't taken for a test server's.
+            editor.backgroundColor = NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? NSColor(srgbRed: 0.24, green: 0.13, blue: 0.13, alpha: 1) : NSColor(srgbRed: 1, green: 0.955, blue: 0.95, alpha: 1)
+            }
+        } else {
+            editor.backgroundColor = AppearanceSettings.theme.background ?? .textBackgroundColor
+        }
+        editor.insertionPointColor = AppearanceSettings.theme.text ?? .textColor
+        var style = table.tableStyle
+        style.fontSize = AppearanceSettings.resultFontSize
+        table.tableStyle = style
+        // Set again so the rows' height follows a new text size too.
+        table.density = nil
+        table.density = switch AppearanceSettings.resultDensity {
+        case "compact": .compact
+        case "spacious": .spacious
+        default: .regular
+        }
+        table.usesAlternatingRowBackgroundColors = AppearanceSettings.alternatingRows
     }
 
     /// The status line as the pane's bottom accessory (macOS 26 and later).

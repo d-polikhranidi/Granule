@@ -33,6 +33,12 @@ final class QueryController {
     /// Columns shown as their final values (`finalizeAggregation`) or text: their bytes can't be read.
     private(set) var rewrittenColumns: [String] = []
     private var running: Task<Void, Never>?
+    /// The running query's progress from the server (polled), and the
+    /// finished one's numbers from its log.
+    private(set) var progress: CHQueryProgress?
+    private(set) var serverStats: CHServerStats?
+    private var monitoring: Task<Void, Never>?
+    private var queryID = ""
     private let sessionID = UUID().uuidString
     private var lastRows = 0
     private(set) var searchText = ""
@@ -75,6 +81,8 @@ final class QueryController {
         let started = ContinuousClock.now
         state = .running(started: started)
         lastRows = 0
+        progress = nil
+        serverStats = nil
         onChange()
         if let format = CHSQL.formatClause(of: sql), format.lowercased() != "native" {
             running = Task { [weak self] in await self?.runForText(sql, parameters: parameters) }
@@ -104,6 +112,8 @@ final class QueryController {
 
     private func runForRows(_ sql: String, parameters: [String: String], rewrites: Int) async {
         var options = CHQueryOptions()
+        queryID = options.queryID
+        monitor(options.queryID)
         options.sessionID = sessionID
         options.parameters = parameters
         let budget = Self.budget
@@ -131,12 +141,14 @@ final class QueryController {
                         latest = result
                     }
                 case .finished(let stats):
+                    monitoring?.cancel()
                     if let latest { add(latest) }
                     if !shown, !isRead {
                         onText(String(localized: "Done."))
                     }
                     state = .finished(stats)
                     finish()
+                    logged(stats.queryID)
                 }
             }
         } catch CHClientError.unsupportedType(let column, let type) where rewrites < 8 && isRead && !column.isEmpty {
@@ -155,6 +167,46 @@ final class QueryController {
             table.sortsRows = true
         }
         onChange()
+    }
+
+    /// The server's progress of a running query, twice a second (from a
+    /// second connection; the session runs the query).
+    private func monitor(_ id: String) {
+        monitoring?.cancel()
+        monitoring = Task { [weak self, client] in
+            try? await Task.sleep(for: .milliseconds(300))
+            while !Task.isCancelled {
+                let progress = try? await client.progress(of: id)
+                guard let self, !Task.isCancelled, self.queryID == id, self.isRunning else { return }
+                if let progress { self.progress = progress }
+                self.onChange()
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+    }
+
+    /// A finished query's numbers from the server's log, once it's written
+    /// there (every 7.5 s by default): looked for a few times.
+    private func logged(_ id: String) {
+        monitoring?.cancel()
+        monitoring = Task { [weak self, client] in
+            for delay in [0.5, 2, 3, 4, 6] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+                let stats: CHServerStats?
+                do {
+                    stats = try await client.serverStats(of: id)
+                } catch {
+                    return
+                }
+                guard let self, self.queryID == id else { return }
+                if let stats {
+                    self.serverStats = stats
+                    self.onChange()
+                    return
+                }
+            }
+        }
     }
 
     /// The first block (or the header): the table's columns.
@@ -197,6 +249,7 @@ final class QueryController {
 
     /// Stops the query (closing its connection; the server is told to kill it).
     func cancel() {
+        monitoring?.cancel()
         guard let running else { return }
         running.cancel()
         self.running = nil
@@ -234,6 +287,17 @@ final class QueryController {
             let seconds = Self.seconds(ContinuousClock.now - started)
             parts.append(rows > 0 ? String(localized: "Receiving… \(rows.formatted()) rows") : String(localized: "Running…"))
             parts.append(String(localized: "\(seconds.formatted(.number.precision(.fractionLength(1)))) s"))
+            if let progress, progress.readRows > 0 {
+                let read = progress.readRows.formatted(.number.notation(.compactName))
+                if let fraction = progress.fraction {
+                    let total = progress.totalRows.formatted(.number.notation(.compactName))
+                    parts.append(String(localized: "read \(read) of \(total) rows (\(fraction.formatted(.percent.precision(.fractionLength(0)))))"))
+                } else {
+                    parts.append(String(localized: "read \(read) rows"))
+                }
+                parts.append(Self.bytes(progress.readBytes))
+                if progress.memory > 0 { parts.append(String(localized: "\(Self.bytes(progress.memory)) memory")) }
+            }
         case .finished(let stats):
             parts.append(rowsText(rows))
             if let first = stats.firstRows, stats.rows > 0 {
@@ -243,6 +307,10 @@ final class QueryController {
             if stats.receivedBytes > 0 { parts.append(ByteCountFormatter.string(fromByteCount: Int64(stats.receivedBytes), countStyle: .file)) }
             if stats.reachedLimit || (source.map { $0.result.byteCount >= Self.budget.bytes } ?? false) {
                 parts.append(String(localized: "stopped at the memory limit"))
+            }
+            if let server = serverStats {
+                let read = server.readRows.formatted(.number.notation(.compactName))
+                parts.append(String(localized: "server: \(server.duration.formatted(.number.precision(.fractionLength(3)))) s, read \(read) rows, \(Self.bytes(server.readBytes)), \(Self.bytes(server.memory)) memory"))
             }
         case .failed:
             parts.append(rows > 0 ? String(localized: "Failed after \(rows.formatted()) rows") : String(localized: "Failed"))
@@ -268,6 +336,10 @@ final class QueryController {
     var error: Error? {
         if case .failed(let error) = state { return error }
         return nil
+    }
+
+    static func bytes(_ count: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .memory)
     }
 
     static func seconds(_ duration: Duration) -> Double {

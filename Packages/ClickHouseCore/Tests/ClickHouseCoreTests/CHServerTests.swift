@@ -83,6 +83,16 @@ struct CHServerTests {
                 for row in 0..<block.rowCount { texts.append(block.columns[0].text(row, context: context)) }
             }
             #expect(texts == expected, "\(expression) as \(result.typeNames.first ?? "?")")
+            // The same text written at once (NULL: none).
+            var bulk: [String] = []
+            for block in result.blocks {
+                var written = CHTexts()
+                block.columns[0].appendTexts(rows: 0..<block.rowCount, context: context, to: &written)
+                for row in 0..<written.count {
+                    bulk.append(block.columns[0].isNull(row) ? "NULL" : written.withText(row) { String(decoding: $0, as: UTF8.self) })
+                }
+            }
+            #expect(bulk == texts, "\(expression) at once")
         }
     }
 

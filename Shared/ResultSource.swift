@@ -139,13 +139,13 @@ struct ResultColumnSource: GHColumnSource {
             for _ in rows { texts.append("") }
             return
         }
+        // Each block's rows written at once (in C for numbers and times), then handed over.
         let context = CHTextContext(defaultTimeZone: timeZone)
-        var writer = CHTextWriter()
+        var written = CHTexts()
         result.forEachBlock(in: rows) { block, range, _ in
-            let values = block.columns[index]
-            for row in range {
-                values.withText(row, context: context, writer: &writer) { Self.append($0, to: &texts) }
-            }
+            written.removeAll()
+            block.columns[index].appendTexts(rows: range, context: context, to: &written)
+            for row in 0..<written.count { written.withText(row) { Self.append($0, to: &texts) } }
         }
     }
 
@@ -167,6 +167,20 @@ struct ResultColumnSource: GHColumnSource {
         result.forEachBlock(in: rows) { block, range, offset in
             block.columns[index].numbers(rows: range, into: base + offset)
         }
+    }
+
+    /// The rows' text where it is for Gingham's search (in place, on all cores):
+    /// a String column searched alone is given as it is kept.
+    func withSearchText(of columns: [GHTableColumn], rows: Range<Int>, starts: UnsafeMutableBufferPointer<UInt32>,
+                        _ body: (UnsafeRawBufferPointer) -> Void) -> Bool {
+        let indexes = columns.compactMap(index)
+        guard indexes.count == columns.count else { return false }
+        #if DEBUG
+        // `-ViewerNoInPlaceSearch YES`: each column's texts read instead, to compare.
+        if UserDefaults.standard.bool(forKey: "ViewerNoInPlaceSearch") { return false }
+        #endif
+        result.withSearchText(columns: indexes, rows: rows, timeZone: timeZone, starts: starts, body)
+        return true
     }
 
     /// A value as the cell shows it: one line (copy and export keep rows apart).

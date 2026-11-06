@@ -21,6 +21,9 @@ func seconds(_ duration: Duration) -> Double {
     Double(duration.components.seconds) + Double(duration.components.attoseconds) / 1e18
 }
 
+// `CH_BENCH_TEXT=1`: also each column's values written as text (what search reads), one thread.
+let timesText = environment["CH_BENCH_TEXT"] == "1"
+
 for run in 1...runs {
     var last: CHResult?
     var stats: CHQueryStats?
@@ -32,6 +35,29 @@ for run in 1...runs {
     }
     guard let stats, let last else { continue }
     let time = seconds(stats.elapsed)
+    if timesText {
+        let context = CHTextContext(defaultTimeZone: info.zone)
+        var writer = CHTextWriter()
+        for (index, name) in last.names.enumerated() {
+            let start = ContinuousClock.now
+            var bytes = 0
+            for block in last.blocks {
+                let column = block.columns[index]
+                for row in 0..<block.rowCount { bytes += column.withText(row, context: context, writer: &writer) { $0.count } }
+            }
+            let time = seconds(ContinuousClock.now - start)
+            let bulkStart = ContinuousClock.now
+            var texts = CHTexts(), bulkBytes = 0
+            for block in last.blocks {
+                texts.removeAll()
+                block.columns[index].appendTexts(rows: 0..<block.rowCount, context: context, to: &texts)
+                bulkBytes += texts.bytes.count
+            }
+            let bulk = seconds(ContinuousClock.now - bulkStart)
+            print(String(format: "  %@ (%@): %.0f ns a value one by one, %.1f ns at once, %d bytes (%d)", name, last.typeNames[index],
+                         time * 1e9 / Double(stats.rows), bulk * 1e9 / Double(stats.rows), bytes, bulkBytes))
+        }
+    }
     print(String(format: "run %d: %d rows, %d columns in %.3f s (first rows %.3f s), received %.1f MB (%.0f MB/s), kept %.1f MB, %.1f M rows/s",
                  run, stats.rows, last.names.count, time, stats.firstRows.map(seconds) ?? 0, Double(stats.receivedBytes) / 1e6,
                  Double(stats.receivedBytes) / 1e6 / time, Double(stats.resultBytes) / 1e6, Double(stats.rows) / 1e6 / time))

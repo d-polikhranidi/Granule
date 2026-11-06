@@ -76,6 +76,36 @@ size_t ch_format_ipv4(uint32_t address, char *out);
 /// An IPv6 address from its 16 bytes (an IPv4-mapped one as ::ffff:a.b.c.d).
 size_t ch_format_ipv6(const uint8_t *bytes, char *out);
 
+/// A float's shortest digits as Swift's `description` writes them (`1e-07`,
+/// `1.2345678901234568e+20`, `-0.0`, `inf`) as ClickHouse writes floats: a
+/// whole number below 10^21, exponent form below 10^-6 (as JavaScript).
+size_t ch_reformat_float(const char *shortest, size_t count, char *out);
+
+// MARK: Text of many values
+
+// Each writes the text of `count` values from value `start` one after another
+// into `out` (room for `count` * CH_TEXT_CAPACITY bytes), where each ends
+// (from `base`) into `ends`, and returns the bytes written. A value whose
+// `nulls[i]` (if `nulls` isn't NULL) isn't 0 has no text.
+
+size_t ch_format_integers(ch_number_kind kind, const void *src, const uint8_t *nulls, size_t start, size_t count,
+                          char *out, uint32_t *ends, uint32_t base);
+size_t ch_format_decimals(ch_number_kind kind, const void *src, const uint8_t *nulls, size_t start, size_t count, int scale,
+                          char *out, uint32_t *ends, uint32_t base);
+/// Date (UInt16 days, `wide` 0) or Date32 (Int32 days, `wide` 1).
+size_t ch_format_dates(int wide, const void *src, const uint8_t *nulls, size_t start, size_t count,
+                       char *out, uint32_t *ends, uint32_t base);
+/// DateTime (UInt32 seconds, `precision` -1) or DateTime64 (Int64 ticks of
+/// 10^-precision s) in local time: `offsets[i]` applies from `instants[i]`
+/// (seconds since 1970) on, `offsets[0]` before `instants[0]` too.
+size_t ch_format_datetimes(const void *src, int precision, const uint8_t *nulls, size_t start, size_t count,
+                           const int64_t *instants, const int32_t *offsets, size_t zone_count,
+                           char *out, uint32_t *ends, uint32_t base);
+/// The least and most seconds of DateTime (`precision` -1) or DateTime64 values.
+void ch_seconds_range(const void *src, int precision, size_t start, size_t count, int64_t *least, int64_t *most);
+size_t ch_format_uuids(const uint8_t *src, const uint8_t *nulls, size_t start, size_t count, char *out, uint32_t *ends, uint32_t base);
+size_t ch_format_ipv4s(const uint32_t *src, const uint8_t *nulls, size_t start, size_t count, char *out, uint32_t *ends, uint32_t base);
+
 #ifdef __cplusplus
 }
 #endif

@@ -73,8 +73,10 @@ targets:
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
-          # Signed to run here, without a profile.
-          CODE_SIGN_IDENTITY: "-"
+          # The team's signature, the same from build to build: signed ad hoc,
+          # each build was another app to the login keychain, which asked again
+          # for the saved passwords. No profile is needed (no such entitlements).
+          CODE_SIGN_IDENTITY: Apple Development
         Release:
           CODE_SIGN_IDENTITY: Apple Development
   # The iPad and iPhone app: the Mac's bundle id (one App Store record,

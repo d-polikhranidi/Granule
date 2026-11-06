@@ -63,10 +63,21 @@ struct CHServerTests {
 
     @Test func valuesAreWrittenAsTheServerWritesThem() async throws {
         let client = try await TestServer.connected()
+        // Only the settings this server has (older ones lack the newer types').
+        let known = Set(try await client.plainText("SELECT name FROM system.settings FORMAT TSV").split(separator: "\n").map(String.init))
+        let typeSettings = Self.typeSettings.filter { known.contains($0.key) }
+        var skipped: [String] = []
         for expression in Self.expressions {
             let sql = "SELECT \(expression) AS v FROM numbers(3)"
-            let result = try await client.result(sql, settings: Self.typeSettings)
-            var settings = Self.typeSettings
+            let result: CHResult
+            do {
+                result = try await client.result(sql, settings: typeSettings)
+            } catch let error as CHServerError where [46, 50, 36, 43, 44, 48, 70].contains(error.code) {
+                // A type or function this server doesn't have (unknown function, type, setting value, …).
+                skipped.append(expression)
+                continue
+            }
+            var settings = typeSettings
             settings["output_format_tsv_crlf_end_of_line"] = "0"
             let expected = try await client.plainText(sql + " FORMAT TSVRaw", settings: settings)
                 .split(separator: "\n", omittingEmptySubsequences: false).dropLast().map { line -> String in
@@ -94,6 +105,8 @@ struct CHServerTests {
             }
             #expect(bulk == texts, "\(expression) at once")
         }
+        // Most expressions run on every server (23.8 lacks Variant, Dynamic, JSON, Time, BFloat16).
+        #expect(skipped.count <= 12, "skipped: \(skipped)")
     }
 
     @Test func numbersSortAndSumByValue() async throws {

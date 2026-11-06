@@ -30,8 +30,10 @@ public final class CHTextContext {
 /// A zone's offset from UTC at an instant, kept by quarter hour: zones
 /// change their offsets only at whole quarter hours.
 final class CHZoneOffsets {
-    private let zone: TimeZone
+    let zone: TimeZone
     private let fixed: Int?
+    /// One offset at all times (UTC, zones without daylight saving time).
+    var isFixed: Bool { fixed != nil }
     private var buckets = [Int64](repeating: .min, count: 256)
     private var offsets = [Int32](repeating: 0, count: 256)
 
@@ -290,65 +292,10 @@ public struct CHTextWriter {
     /// whole number below 10^21, in exponent form below 10^-6 (as JavaScript).
     private mutating func appendFloat(_ description: String) {
         var text = description
-        if text == "inf" || text == "-inf" || text == "nan" || text == "-nan" {
-            if text == "-nan" { text = "nan" }
-            text.withUTF8 { bytes.append(contentsOf: $0) }
-            return
-        }
-        var utf8 = Array(text.utf8)
-        var negative = false
-        if utf8.first == UInt8(ascii: "-") {
-            negative = true
-            utf8.removeFirst()
-        }
-        // Digits and the power of ten after them: value = 0.digits × 10^point.
-        var digits: [UInt8] = [], point = 0, exponent = 0, seenPoint = false, index = 0
-        while index < utf8.count {
-            let byte = utf8[index]
-            if byte == UInt8(ascii: "e") || byte == UInt8(ascii: "E") {
-                exponent = Int(String(decoding: utf8[(index + 1)...], as: UTF8.self)) ?? 0
-                break
+        text.withUTF8 { utf8 in
+            utf8.withMemoryRebound(to: CChar.self) { shortest in
+                appendFormatted { ch_reformat_float(shortest.baseAddress, shortest.count, $0) }
             }
-            if byte == UInt8(ascii: ".") {
-                seenPoint = true
-            } else {
-                digits.append(byte)
-                if !seenPoint { point += 1 }
-            }
-            index += 1
-        }
-        // Leading zeros (0.001) out, the point moved with them; trailing ones out.
-        while digits.count > 1, digits.first == UInt8(ascii: "0") {
-            digits.removeFirst()
-            point -= 1
-        }
-        while digits.count > 1, digits.last == UInt8(ascii: "0") { digits.removeLast() }
-        point += exponent
-        if negative { append(UInt8(ascii: "-")) }
-        if digits == [UInt8(ascii: "0")] {
-            append(UInt8(ascii: "0"))
-            return
-        }
-        let count = digits.count
-        if count <= point, point <= 21 {
-            bytes.append(contentsOf: digits)
-            bytes.append(contentsOf: repeatElement(UInt8(ascii: "0"), count: point - count))
-        } else if 0 < point, point <= 21 {
-            bytes.append(contentsOf: digits[..<point])
-            append(UInt8(ascii: "."))
-            bytes.append(contentsOf: digits[point...])
-        } else if -6 < point, point <= 0 {
-            append("0.")
-            bytes.append(contentsOf: repeatElement(UInt8(ascii: "0"), count: -point))
-            bytes.append(contentsOf: digits)
-        } else {
-            append(digits[0])
-            if count > 1 {
-                append(UInt8(ascii: "."))
-                bytes.append(contentsOf: digits[1...])
-            }
-            append(UInt8(ascii: "e"))
-            bytes.append(contentsOf: String(point - 1).utf8)
         }
     }
 }

@@ -66,3 +66,46 @@ public struct CHResult: Sendable {
         }
     }
 }
+
+extension CHResult {
+    /// The text of `columns` (by index) for `rows`, a row's after another as
+    /// UTF-8, a tab between a row's values, for a search of them: `body`
+    /// gets the bytes (valid while it runs), `starts[i]` where row
+    /// `rows.lowerBound + i` begins, `starts[rows.count]` where the last ends.
+    /// One String column of rows in one block is given as it is kept (no copy).
+    public func withSearchText(columns: [Int], rows: Range<Int>, timeZone: TimeZone, starts: UnsafeMutableBufferPointer<UInt32>,
+                               _ body: (UnsafeRawBufferPointer) -> Void) {
+        guard !rows.isEmpty, starts.count > rows.count else { return body(UnsafeRawBufferPointer(start: nil, count: 0)) }
+        if columns.count == 1 {
+            let (blockIndex, first) = locate(rows.lowerBound)
+            let column = blocks[blockIndex].columns[columns[0]]
+            if first + rows.count <= column.count, case .strings(let ends, let chars) = column.storage {
+                let end = ends.pointer(to: UInt32.self)
+                let base = first == 0 ? 0 : end[first - 1]
+                starts[0] = 0
+                for offset in 0..<rows.count { starts[offset + 1] = end[first + offset] - base }
+                return body(UnsafeRawBufferPointer(start: chars.base + Int(base), count: Int(end[first + rows.count - 1] - base)))
+            }
+        }
+        // Each column's texts at once, then a row's after another.
+        let context = CHTextContext(defaultTimeZone: timeZone)
+        var columnTexts = [CHTexts](repeating: CHTexts(), count: columns.count)
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(rows.count * 16 * columns.count)
+        forEachBlock(in: rows) { block, range, offset in
+            for (index, column) in columns.enumerated() {
+                columnTexts[index].removeAll()
+                block.columns[column].appendTexts(rows: range, context: context, to: &columnTexts[index])
+            }
+            for row in 0..<range.count {
+                starts[offset + row] = UInt32(truncatingIfNeeded: bytes.count)
+                for texts in columnTexts {
+                    texts.withText(row) { bytes.append(contentsOf: $0) }
+                    bytes.append(0x09)
+                }
+            }
+        }
+        starts[rows.count] = UInt32(truncatingIfNeeded: bytes.count)
+        bytes.withUnsafeBytes(body)
+    }
+}

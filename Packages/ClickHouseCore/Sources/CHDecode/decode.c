@@ -402,3 +402,170 @@ size_t ch_format_ipv6(const uint8_t *bytes, char *out) {
     memcpy(out, text, length);
     return length;
 }
+
+// MARK: Floats
+
+size_t ch_reformat_float(const char *in, size_t count, char *out) {
+    size_t at = 0, i = 0;
+    if (count >= 3 && (in[count - 1] == 'f' || in[count - 1] == 'n')) {
+        // inf, -inf, nan, -nan (ClickHouse: nan without a sign).
+        if (in[count - 1] == 'n') { memcpy(out, "nan", 3); return 3; }
+        memcpy(out, in, count);
+        return count;
+    }
+    if (in[0] == '-') { out[at++] = '-'; i = 1; }
+    // The digits and the power of ten after them: value = 0.digits × 10^point.
+    char digits[40];
+    int digit_count = 0, point = 0, seen_point = 0, exponent = 0;
+    for (; i < count; i++) {
+        char c = in[i];
+        if (c == 'e' || c == 'E') {
+            int sign = 1;
+            i++;
+            if (i < count && (in[i] == '+' || in[i] == '-')) { sign = in[i] == '-' ? -1 : 1; i++; }
+            for (; i < count; i++) exponent = exponent * 10 + (in[i] - '0');
+            exponent *= sign;
+            break;
+        }
+        if (c == '.') { seen_point = 1; continue; }
+        if (digit_count < 40) digits[digit_count++] = c;
+        if (!seen_point) point++;
+    }
+    int lead = 0;
+    while (lead < digit_count - 1 && digits[lead] == '0') { lead++; point--; }
+    int end = digit_count;
+    while (end > lead + 1 && digits[end - 1] == '0') end--;
+    const char *d = digits + lead;
+    int n = end - lead;
+    point += exponent;
+    if (n == 1 && d[0] == '0') { out[at++] = '0'; return at; }
+    if (n <= point && point <= 21) {
+        memcpy(out + at, d, (size_t)n); at += (size_t)n;
+        memset(out + at, '0', (size_t)(point - n)); at += (size_t)(point - n);
+    } else if (0 < point && point <= 21) {
+        memcpy(out + at, d, (size_t)point); at += (size_t)point;
+        out[at++] = '.';
+        memcpy(out + at, d + point, (size_t)(n - point)); at += (size_t)(n - point);
+    } else if (-6 < point && point <= 0) {
+        out[at++] = '0'; out[at++] = '.';
+        memset(out + at, '0', (size_t)(-point)); at += (size_t)(-point);
+        memcpy(out + at, d, (size_t)n); at += (size_t)n;
+    } else {
+        out[at++] = d[0];
+        if (n > 1) { out[at++] = '.'; memcpy(out + at, d + 1, (size_t)(n - 1)); at += (size_t)(n - 1); }
+        out[at++] = 'e';
+        int e = point - 1;
+        if (e < 0) { out[at++] = '-'; e = -e; }
+        at += format_u64((uint64_t)e, out + at);
+    }
+    return at;
+}
+
+// MARK: Text of many values
+
+#define FOR_VALUES(...) do { \
+        size_t at = 0; \
+        for (size_t i = 0; i < count; i++) { \
+            size_t index = start + i; \
+            if (!(nulls && nulls[index])) { __VA_ARGS__; } \
+            ends[i] = base + (uint32_t)at; \
+        } \
+        return at; \
+    } while (0)
+
+size_t ch_format_integers(ch_number_kind kind, const void *src, const uint8_t *nulls, size_t start, size_t count,
+                          char *out, uint32_t *ends, uint32_t base) {
+    switch (kind) {
+    case CH_U8: FOR_VALUES(at += format_u64(((const uint8_t *)src)[index], out + at));
+    case CH_U16: FOR_VALUES(at += format_u64(((const uint16_t *)src)[index], out + at));
+    case CH_U32: FOR_VALUES(at += format_u64(((const uint32_t *)src)[index], out + at));
+    case CH_U64: FOR_VALUES(at += format_u64(((const uint64_t *)src)[index], out + at));
+    default: FOR_VALUES(at += ch_format_integer(kind, src, index, out + at));
+    }
+}
+
+size_t ch_format_decimals(ch_number_kind kind, const void *src, const uint8_t *nulls, size_t start, size_t count, int scale,
+                          char *out, uint32_t *ends, uint32_t base) {
+    FOR_VALUES(at += ch_format_decimal(kind, src, index, scale, out + at));
+}
+
+size_t ch_format_dates(int wide, const void *src, const uint8_t *nulls, size_t start, size_t count,
+                       char *out, uint32_t *ends, uint32_t base) {
+    if (wide) FOR_VALUES(at += ch_format_date(((const int32_t *)src)[index], out + at));
+    FOR_VALUES(at += ch_format_date(((const uint16_t *)src)[index], out + at));
+}
+
+static const int64_t powers_of_ten[19] = {
+    1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000, 1000000000, 10000000000ll, 100000000000ll,
+    1000000000000ll, 10000000000000ll, 100000000000000ll, 1000000000000000ll, 10000000000000000ll,
+    100000000000000000ll, 1000000000000000000ll,
+};
+
+/// The offset at an instant: the last zone entry at or before it (the first before all).
+static int32_t zone_offset(int64_t seconds, const int64_t *instants, const int32_t *offsets, size_t zone_count, size_t *hint) {
+    size_t i = *hint;
+    if (i + 1 < zone_count && seconds >= instants[i + 1]) {
+        while (i + 1 < zone_count && seconds >= instants[i + 1]) i++;
+    } else {
+        while (i > 0 && seconds < instants[i]) i--;
+    }
+    *hint = i;
+    return offsets[i];
+}
+
+size_t ch_format_datetimes(const void *src, int precision, const uint8_t *nulls, size_t start, size_t count,
+                           const int64_t *instants, const int32_t *offsets, size_t zone_count,
+                           char *out, uint32_t *ends, uint32_t base) {
+    size_t hint = 0;
+    if (precision < 0) {
+        const uint32_t *values = src;
+        if (zone_count == 1) {
+            int64_t offset = offsets[0];
+            FOR_VALUES(at += ch_format_datetime((int64_t)values[index] + offset, 0, 0, out + at));
+        }
+        FOR_VALUES({
+            int64_t seconds = values[index];
+            at += ch_format_datetime(seconds + zone_offset(seconds, instants, offsets, zone_count, &hint), 0, 0, out + at);
+        });
+    }
+    const int64_t *ticks = src;
+    int64_t scale = powers_of_ten[precision > 18 ? 18 : precision];
+    FOR_VALUES({
+        int64_t value = ticks[index];
+        int64_t seconds = value / scale, fraction = value % scale;
+        if (fraction < 0) { seconds -= 1; fraction += scale; }
+        at += ch_format_datetime(seconds + zone_offset(seconds, instants, offsets, zone_count, &hint), fraction, precision, out + at);
+    });
+}
+
+void ch_seconds_range(const void *src, int precision, size_t start, size_t count, int64_t *least, int64_t *most) {
+    int64_t low = INT64_MAX, high = INT64_MIN;
+    if (precision < 0) {
+        const uint32_t *values = (const uint32_t *)src + start;
+        for (size_t i = 0; i < count; i++) {
+            int64_t value = values[i];
+            low = value < low ? value : low;
+            high = value > high ? value : high;
+        }
+    } else {
+        const int64_t *values = (const int64_t *)src + start;
+        int64_t scale = powers_of_ten[precision > 18 ? 18 : precision];
+        for (size_t i = 0; i < count; i++) {
+            int64_t value = values[i];
+            low = value < low ? value : low;
+            high = value > high ? value : high;
+        }
+        low = low / scale - 1;
+        high = high / scale + 1;
+    }
+    *least = low;
+    *most = high;
+}
+
+size_t ch_format_uuids(const uint8_t *src, const uint8_t *nulls, size_t start, size_t count, char *out, uint32_t *ends, uint32_t base) {
+    FOR_VALUES(at += ch_format_uuid(src + index * 16, out + at));
+}
+
+size_t ch_format_ipv4s(const uint32_t *src, const uint8_t *nulls, size_t start, size_t count, char *out, uint32_t *ends, uint32_t base) {
+    FOR_VALUES(at += ch_format_ipv4(src[index], out + at));
+}

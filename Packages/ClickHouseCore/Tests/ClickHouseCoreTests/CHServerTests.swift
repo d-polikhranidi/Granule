@@ -214,3 +214,56 @@ struct CHServerTests {
         #expect(text.split(separator: "\n").count == 100_001)
     }
 }
+
+/// A user with readonly = 1 (no settings in a request): created by the tests' user if it may.
+@Suite(.enabled(if: TestServer.isAvailable, "CH_TEST_URL names no server"), .serialized)
+struct CHReadonlyUserTests {
+    static func reader() async throws -> CHClient? {
+        let admin = try await TestServer.connected()
+        do {
+            _ = try await admin.plainText("CREATE USER IF NOT EXISTS viewer_test_reader IDENTIFIED BY 'reader' SETTINGS readonly = 1")
+            _ = try await admin.plainText("GRANT SELECT ON *.* TO viewer_test_reader")
+        } catch {
+            return nil
+        }
+        var endpoint = admin.endpoint
+        endpoint.user = "viewer_test_reader"
+        let client = CHClient(endpoint: endpoint, password: "reader")
+        let info = try await client.connect()
+        #expect(info.readonly == 1)
+        return client
+    }
+
+    @Test func readsWithoutSettings() async throws {
+        guard let client = try await Self.reader() else { return }
+        let result = try await client.result("""
+            SELECT number, toDateTime('2026-03-29 00:30:00', 'Europe/Berlin') AS t, toLowCardinality(toString(number)) AS l
+            FROM numbers(100000)
+            """)
+        #expect(result.rowCount == 100_000)
+        #expect(result.typeNames[1] == "DateTime('Europe/Berlin')")
+        let context = CHTextContext(defaultTimeZone: .gmt)
+        #expect(result.blocks[0].columns[1].text(0, context: context) == "2026-03-29 00:30:00")
+    }
+
+    @Test func theLimitHoldsOnTheViewersSide() async throws {
+        guard let client = try await Self.reader() else { return }
+        var options = CHQueryOptions()
+        options.maxBytes = 4 << 20
+        var stats: CHQueryStats?
+        for try await event in client.execute("SELECT number FROM numbers(50000000)", options: options) {
+            if case .finished(let finished) = event { stats = finished }
+        }
+        let finished = try #require(stats)
+        #expect(finished.reachedLimit)
+        #expect(finished.rows < 50_000_000 && finished.resultBytes >= 4 << 20)
+    }
+
+    @Test func exportsInTheServersFormat() async throws {
+        guard let client = try await Self.reader() else { return }
+        let file = FileManager.default.temporaryDirectory.appending(path: "chviewer-reader-\(UUID().uuidString).csv")
+        defer { try? FileManager.default.removeItem(at: file) }
+        _ = try await client.download("SELECT number FROM numbers(3)", format: "CSV", to: file)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "0\n1\n2\n")
+    }
+}

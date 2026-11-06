@@ -153,26 +153,33 @@ public final class CHClient: Sendable {
         return request
     }
 
-    /// The settings every result query gets: Native blocks in LZ4 frames,
-    /// no HTTP compression on top, the layouts the decoder reads, and for
-    /// statements that only read, `readonly` (so closing the connection
-    /// cancels them).
+    /// Whether requests may change settings: a user with `readonly = 1`
+    /// may not (Code 164); the HTTP interface's own parameters still work
+    /// (`default_format`, `compress`, `client_protocol_version`).
+    var maySetSettings: Bool { (state.value?.readonly ?? 0) != 1 }
+
+    /// Whether JSON columns come as their text (24.10+, when settings may be set).
+    var readsJSONAsText: Bool { maySetSettings && (state.value?.version.isAtLeast(24, 10) ?? false) }
+
+    /// The parameters and settings every result query gets: Native blocks
+    /// (in LZ4 frames off the local network), the layouts the decoder reads,
+    /// and for statements that only read, `readonly` (so closing the
+    /// connection cancels them) and the most of the result kept.
     func resultSettings(for sql: String, options: CHQueryOptions) -> [String: String] {
-        let info = state.value
-        // A user with readonly = 1 may change no setting at all in a request.
-        guard (info?.readonly ?? 0) != 1 else { return [:] }
         var settings: [String: String] = [
             "default_format": "Native",
-            "enable_http_compression": "0",
             "client_protocol_version": String(CHNativeReader.revision),
         ]
         if endpoint.compressesResults {
             settings["compress"] = "1"
-            settings["network_compression_method"] = "LZ4"
         }
-        if let version = info?.version {
-            if version.isAtLeast(24, 10) { settings["output_format_native_write_json_as_string"] = "1" }
-            if version.isAtLeast(25, 6) { settings["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1" }
+        guard maySetSettings else { return settings }
+        let info = state.value
+        settings["enable_http_compression"] = "0"
+        if endpoint.compressesResults { settings["network_compression_method"] = "LZ4" }
+        if readsJSONAsText { settings["output_format_native_write_json_as_string"] = "1" }
+        if let version = info?.version, version.isAtLeast(25, 6) {
+            settings["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1"
         }
         let reads = CHSQL.kind(of: sql) == .read
         if reads || endpoint.isReadOnly {
@@ -197,7 +204,7 @@ public final class CHClient: Sendable {
     /// closed and the server told to kill it.
     public func execute(_ sql: String, options: CHQueryOptions = CHQueryOptions()) -> AsyncThrowingStream<CHQueryEvent, Error> {
         AsyncThrowingStream { continuation in
-            let request: URLRequest
+            var request: URLRequest
             do {
                 let settings = resultSettings(for: sql, options: options)
                 request = try self.request(sql, settings: settings, database: nil, queryID: options.queryID,
@@ -206,8 +213,10 @@ public final class CHClient: Sendable {
                 continuation.finish(throwing: error)
                 return
             }
-            let reader = CHStreamReader(queryID: options.queryID, maxRows: options.maxRows, compressed: endpoint.compressesResults,
-                                        continuation: continuation)
+            // No HTTP compression on top (a user with readonly = 1 can't turn it off by a setting).
+            request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+            let reader = CHStreamReader(queryID: options.queryID, maxRows: options.maxRows, maxBytes: options.maxBytes,
+                                        compressed: endpoint.compressesResults, jsonAsText: readsJSONAsText, continuation: continuation)
             let delegate = CHQueryDelegate(trust: endpoint.trust, reader: reader)
             // A session of its own: its results are read on its own queue.
             let queue = OperationQueue()
@@ -256,8 +265,8 @@ public final class CHClient: Sendable {
     public func download(_ sql: String, format: String, to file: URL, parameters: [String: String] = [:],
                          progress: @escaping @Sendable (Int) -> Void = { _ in }) async throws -> Int {
         // The server's own compression over a slow network (URLSession decodes gzip and Brotli).
-        var settings = ["default_format": format, "enable_http_compression": "1"]
-        if (state.value?.readonly ?? 0) == 1 { settings = [:] }
+        var settings = ["default_format": format]
+        if maySetSettings { settings["enable_http_compression"] = "1" }
         let request = try request(sql, settings: settings, database: nil, parameters: parameters)
         guard FileManager.default.createFile(atPath: file.path, contents: nil) else { throw CocoaError(.fileWriteUnknown) }
         let handle = try FileHandle(forWritingTo: file)

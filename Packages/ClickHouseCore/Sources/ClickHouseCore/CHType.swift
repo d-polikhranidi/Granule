@@ -61,6 +61,18 @@ public indirect enum CHType: Sendable, Hashable {
         }
     }
 
+    /// Whether it is or holds JSON.
+    var containsJSON: Bool {
+        switch self {
+        case .json: true
+        case .nullable(let inner), .lowCardinality(let inner), .array(let inner): inner.containsJSON
+        case .tuple(let elements): elements.contains { $0.type.containsJSON }
+        case .map(let key, let value): key.containsJSON || value.containsJSON
+        case .variant(let types): types.contains(where: \.containsJSON)
+        default: false
+        }
+    }
+
     /// The type without `Nullable` and `LowCardinality` around it.
     public var base: CHType {
         switch self {

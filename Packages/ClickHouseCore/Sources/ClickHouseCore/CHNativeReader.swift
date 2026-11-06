@@ -40,12 +40,16 @@ struct CHNativeReader {
 
     private let bytes: UnsafeRawBufferPointer
     private let hasBlockInfo: Bool
+    /// Whether JSON columns are their text (`output_format_native_write_json_as_string`);
+    /// without it their layout isn't one the viewer reads.
+    private let jsonAsText: Bool
     /// Where the next byte is read.
     private(set) var offset = 0
 
-    init(_ bytes: UnsafeRawBufferPointer, revision: Int = CHNativeReader.revision) {
+    init(_ bytes: UnsafeRawBufferPointer, revision: Int = CHNativeReader.revision, jsonAsText: Bool = true) {
         self.bytes = bytes
         hasBlockInfo = revision > 0
+        self.jsonAsText = jsonAsText
     }
 
     /// Whether every byte has been read.
@@ -64,7 +68,7 @@ struct CHNativeReader {
                 let name = try readString()
                 let typeName = try readString()
                 let type = CHType(parsing: typeName)
-                guard type.isReadable else { throw CHDecodeError.unsupportedType(column: name, type: typeName) }
+                guard type.isReadable, jsonAsText || !type.containsJSON else { throw CHDecodeError.unsupportedType(column: name, type: typeName) }
                 names.append(name)
                 typeNames.append(typeName)
                 types.append(type)

@@ -184,6 +184,10 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         editorScroll.widthAnchor.constraint(equalTo: editorPane.widthAnchor).isActive = true
         checkBar.widthAnchor.constraint(equalTo: editorPane.widthAnchor).isActive = true
         checker.onChange = { [weak self] in self?.showProblems() }
+        checker.database = { [weak self] in
+            guard let self else { return nil }
+            return queries.currentDatabase ?? (endpoint.database.isEmpty ? nil : endpoint.database)
+        }
 
         let split = NSSplitView()
         split.isVertical = false

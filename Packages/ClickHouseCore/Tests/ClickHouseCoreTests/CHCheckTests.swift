@@ -65,3 +65,53 @@ struct CHServerCheckTests {
         #expect(ContinuousClock.now - started < .seconds(3))
     }
 }
+
+/// Statements that write: checked by the schema and the analyzer, never run.
+@Suite(.enabled(if: TestServer.isAvailable, "CH_TEST_URL names no server"), .serialized)
+struct CHWriteCheckTests {
+    static func client() async throws -> CHClient {
+        let client = try await TestServer.connected()
+        _ = try await client.plainText("""
+            CREATE TABLE IF NOT EXISTS default.viewer_check_t (id UInt64, name String, price Decimal(10, 2),
+                total Decimal(10, 2) MATERIALIZED price * 2, day Date)
+            ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY id
+            """)
+        return client
+    }
+
+    /// The problems' marked texts and first suggestions.
+    private func check(_ statement: String) async throws -> [String] {
+        let client = try await Self.client()
+        return try await client.check(statement, database: "default").map { problem in
+            let marked = problem.range.map { (statement as NSString).substring(with: $0) } ?? "-"
+            return marked + (problem.suggestions.first.map { "→" + $0 } ?? "")
+        }
+    }
+
+    @Test func inserts() async throws {
+        #expect(try await check("INSERT INTO viewer_check_t (id, nmae) VALUES (1, 'a')") == ["nmae→name"])
+        #expect(try await check("INSERT INTO viewer_check_t (id, total) VALUES (1, 2)") == ["total"])
+        #expect(try await check("INSERT INTO viewer_check_t VALUES (1, 'a', 2.5, '2026-01-01'), (2, 'b')") == ["(2, 'b')"])
+        #expect(try await check("INSERT INTO viewer_check_t (id, name) SELECT number, toString(number), 1 FROM numbers(3)") == ["SELECT"])
+        #expect(try await check("INSERT INTO viewer_check_t (id, name) SELECT numbr, toString(number) FROM numbers(3)") == ["numbr→number"])
+        #expect(try await check("INSERT INTO viewer_check_t (id, name, price, day) VALUES (1, 'a', 2.5, today())").isEmpty)
+        #expect(try await check("INSERT INTO viewer_check_x (id) VALUES (1)") == ["viewer_check_x→viewer_check_t"])
+        // Nothing was inserted by checking.
+        let client = try await Self.client()
+        #expect(try await client.plainText("SELECT count() FROM default.viewer_check_t FORMAT TSV").trimmingCharacters(in: .newlines) == "0")
+    }
+
+    @Test func alters() async throws {
+        #expect(try await check("ALTER TABLE viewer_check_t UPDATE id = 2 WHERE name = 'a'") == ["id"])
+        #expect(try await check("ALTER TABLE viewer_check_t UPDATE nme = 'b' WHERE id = 1") == ["nme→name"])
+        #expect(try await check("ALTER TABLE viewer_check_t UPDATE name = cuont() WHERE id = 1") == ["cuont→count"])
+        #expect(try await check("ALTER TABLE viewer_check_t DELETE WHERE prise > 1") == ["prise→price"])
+        #expect(try await check("ALTER TABLE viewer_check_t UPDATE name = 'b', price = price * 2 WHERE id = 1").isEmpty)
+        #expect(try await check("ALTER TABLE viewer_check_t DROP COLUMN nam") == ["nam→name"])
+        #expect(try await check("ALTER TABLE viewer_check_t DROP COLUMN IF EXISTS nam").isEmpty)
+        #expect(try await check("ALTER TABLE viewer_check_t ADD COLUMN name String") == ["name"])
+        #expect(try await check("ALTER TABLE viewer_check_t ADD COLUMN IF NOT EXISTS name String, RENAME COLUMN price TO name") == ["name"])
+        #expect(try await check("DELETE FROM viewer_check_t WHERE dya = today()") == ["dya→day"])
+        #expect(try await check("ALTER TABLE default.viewer_check_t ON CLUSTER default MODIFY COLUMN name LowCardinality(String)").isEmpty)
+    }
+}

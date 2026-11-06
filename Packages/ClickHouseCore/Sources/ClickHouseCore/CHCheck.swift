@@ -109,7 +109,7 @@ extension CHClient {
     /// Checking names runs a statement's scalar subqueries, so it's done
     /// only within `limit` seconds and when `checksNames`; a check the limits
     /// stop says nothing. Problems' ranges are in the statement.
-    public func check(_ statement: String, checksNames: Bool = true, limit: Double = 1) async throws -> [CHSQL.Problem] {
+    public func check(_ statement: String, checksNames: Bool = true, limit: Double = 1, database: String? = nil) async throws -> [CHSQL.Problem] {
         // A user with readonly = 1 can't set the limits: names only without scalar subqueries.
         var settings = ["readonly": "2", "cancel_http_readonly_queries_on_client_close": "1",
                         "max_execution_time": String(limit), "timeout_overflow_mode": "throw",
@@ -127,32 +127,51 @@ extension CHClient {
             return Self.problems(from: error, in: statement, prefix: syntax).map { [$0] } ?? []
         }
         let isQuery = CHSQL.kind(of: statement) == .read
-        guard checksNames, isQuery, maySetSettings || !CHSQL.mayHaveScalarSubquery(statement) else { return [] }
+        guard checksNames, maySetSettings || !CHSQL.mayHaveScalarSubquery(statement) else { return [] }
+        // Statements that write: their table and columns by the schema, their expressions by the analyzer.
+        guard isQuery else {
+            var analysis = settings
+            analysis["default_format"] = nil
+            return try await checkWrite(statement, database: database, settings: analysis)
+        }
+        guard let error = try await namesError(of: statement, settings: settings) else { return [] }
+        // (The place in the request: after the EXPLAIN's words, which the error doesn't say: the name is looked for.)
+        return Self.problems(from: error, in: statement, prefix: nil).map { [$0] } ?? []
+    }
+
+    /// The analyzer's error on a query's names and types, without running it
+    /// (`EXPLAIN QUERY TREE`; `EXPLAIN PLAN` before 24.3 or with the analyzer
+    /// off); `nil` for none, or when the limits stopped it.
+    func namesError(of query: String, settings: [String: String]) async throws -> CHServerError? {
         let modern = serverInfo?.version.isAtLeast(24, 3) ?? true
         var forms = modern ? ["EXPLAIN QUERY TREE ", "EXPLAIN PLAN "] : ["EXPLAIN PLAN "]
+        var settings = settings
+        settings["default_format"] = "Null"
         while let form = forms.first {
             forms.removeFirst()
             do {
-                _ = try await plainText(form + statement, settings: settings)
-                return []
+                _ = try await plainText(form + query, settings: settings)
+                return nil
             } catch let error as CHServerError {
                 // Not the user's: the limits stopped it, or the analyzer is off (QUERY TREE needs it).
-                if [159, 158, 307, 241, 394, 160].contains(error.code) { return [] }
+                if [159, 158, 307, 241, 394, 160].contains(error.code) { return nil }
                 if error.code == 48 || error.message.localizedCaseInsensitiveContains("analyzer"), !forms.isEmpty { continue }
-                return Self.problems(from: error, in: statement, prefix: form).map { [$0] } ?? []
+                return error
             }
         }
-        return []
+        return nil
     }
 
     /// A server error as a problem of the statement: the place a syntax
     /// error gives (a UTF-8 offset from 1 in the request), or the name an
     /// error quotes (`countr`), and the names it suggests.
-    static func problems(from error: CHServerError, in statement: String, prefix: String) -> CHSQL.Problem? {
+    /// `prefix`: what the request had before the statement (`nil`: the
+    /// request wasn't the statement, a place in it says nothing of the statement's).
+    static func problems(from error: CHServerError, in statement: String, prefix: String?) -> CHSQL.Problem? {
         let text = statement as NSString
         var message = error.message
         var range: NSRange?
-        if let match = message.range(of: #"failed at position (\d+)"#, options: .regularExpression),
+        if let prefix, let match = message.range(of: #"failed at position (\d+)"#, options: .regularExpression),
            let position = Int(message[match].split(separator: " ").last ?? "") {
             let offset = position - 1 - prefix.utf8.count
             if offset >= 0, let location = Self.utf16Offset(ofUTF8: offset, in: statement) {
@@ -210,6 +229,12 @@ extension CHClient {
                     break
                 }
             }
+        }
+        // The server's suggestions, the nearest to the wrong name first.
+        if let range, suggestions.count > 1 {
+            let wrong = text.substring(with: range)
+            let ranked = closest(wrong, among: suggestions, limit: suggestions.count, within: Int.max)
+            suggestions = ranked + suggestions.filter { !ranked.contains($0) }
         }
         return CHSQL.Problem(range: range, message: message, suggestions: suggestions, isFromServer: true)
     }

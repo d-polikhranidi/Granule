@@ -121,6 +121,10 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         checkBar.backgroundColor = .secondarySystemBackground
         checkBar.isHidden = true
         checker.onChange = { [weak self] in self?.showProblems() }
+        checker.database = { [weak self] in
+            guard let self else { return nil }
+            return queries.currentDatabase ?? (endpoint.database.isEmpty ? nil : endpoint.database)
+        }
         let stack = UIStackView(arrangedSubviews: [editor, checkBar, messageLabel, results, statusLabel])
         stack.axis = .vertical
         stack.spacing = 4

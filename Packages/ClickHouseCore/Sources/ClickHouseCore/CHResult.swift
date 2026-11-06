@@ -109,3 +109,18 @@ extension CHResult {
         bytes.withUnsafeBytes(body)
     }
 }
+
+extension CHResult {
+    /// Its values as text, row by row (NULL as no text): the viewer's own small queries.
+    public func rows(timeZone: TimeZone = .gmt) -> [[String]] {
+        let context = CHTextContext(defaultTimeZone: timeZone)
+        var rows: [[String]] = []
+        rows.reserveCapacity(rowCount)
+        for block in blocks {
+            for row in 0..<block.rowCount {
+                rows.append(block.columns.map { $0.isNull(row) ? "" : $0.text(row, context: context) })
+            }
+        }
+        return rows
+    }
+}

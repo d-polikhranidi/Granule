@@ -53,6 +53,8 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
     private let connectButton = NSButton(title: String(localized: "Connect"), target: nil, action: nil)
     private let testButton = NSButton(title: String(localized: "Test"), target: nil, action: nil)
     private var form: NSView!
+    /// In the form's place when no connection is selected.
+    private var placeholder: NSView!
     private var authority: Data?
 
     init(onConnect: @escaping (CHEndpoint, CHClient) -> Void) {
@@ -236,17 +238,34 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         form = formStack
 
         let split = NSStackView(views: [side, formStack])
+        // A hidden form keeps its place (the window doesn't jump), the placeholder over it.
+        split.detachesHiddenViews = false
         split.alignment = .top
         split.spacing = 20
         split.edgeInsets = NSEdgeInsets(top: 20, left: 16, bottom: 20, right: 20)
         split.translatesAutoresizingMaskIntoConstraints = false
         content.addSubview(split)
+        let icon = NSImageView(image: NSImage(systemSymbolName: "server.rack", accessibilityDescription: nil)!)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 40, weight: .light)
+        icon.contentTintColor = .tertiaryLabelColor
+        let hint = NSTextField(labelWithString: String(localized: "Select a connection, or create a new one."))
+        hint.textColor = .secondaryLabelColor
+        let create = NSButton(title: String(localized: "New Connection"), target: self, action: #selector(addConnection(_:)))
+        let empty = NSStackView(views: [icon, hint, create])
+        empty.orientation = .vertical
+        empty.spacing = 12
+        empty.translatesAutoresizingMaskIntoConstraints = false
+        empty.isHidden = true
+        content.addSubview(empty)
+        placeholder = empty
         NSLayoutConstraint.activate([
             split.leadingAnchor.constraint(equalTo: content.leadingAnchor),
             split.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             split.topAnchor.constraint(equalTo: content.topAnchor),
             split.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             side.widthAnchor.constraint(equalToConstant: 200),
+            empty.centerXAnchor.constraint(equalTo: formStack.centerXAnchor),
+            empty.centerYAnchor.constraint(equalTo: side.centerYAnchor),
             side.bottomAnchor.constraint(equalTo: split.bottomAnchor, constant: -20),
         ])
     }
@@ -319,6 +338,7 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
 
     private func fill(from endpoint: CHEndpoint?) {
         form.isHidden = endpoint == nil
+        placeholder.isHidden = endpoint != nil
         guard let endpoint else { return }
         urlField.stringValue = ""
         nameField.stringValue = endpoint.name
@@ -401,8 +421,15 @@ final class ConnectionsWindowController: NSWindowController, NSTableViewDataSour
         try? await Task.sleep(for: .seconds(3))
         check("Connect with the right one opens the window", queryWindows() == 1 && connectButton.title == String(localized: "Connect"))
         check("the name reached the list", endpoints.contains { $0.name == "Checked" } && selected?.name == "Checked")
+        check("the connections window closed for the server's", !window.isVisible)
         NSApp.windows.filter { $0.windowController is QueryWindowController }.forEach { $0.close() }
         try? await Task.sleep(for: .seconds(1))
+        check("it came back when the server's window closed", window.isVisible)
+        list.deselectAll(nil)
+        try? await Task.sleep(for: .milliseconds(300))
+        check("no connection selected: the hint in the form's place", form.isHidden && !placeholder.isHidden)
+        FileHandle.standardError.write(Data("VIEWER-PLACEHOLDER \(window.windowNumber)\n".utf8))
+        try? await Task.sleep(for: .seconds(2))
         // Its own list, emptied: the entries and their Keychain items made here.
         for endpoint in endpoints { Connections.shared.remove(endpoint) }
         NSApp.terminate(nil)

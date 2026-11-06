@@ -487,7 +487,13 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     func windowWillClose(_ notification: Notification) {
         if let focusMonitor { NSEvent.removeMonitor(focusMonitor) }
         focusMonitor = nil
-        UserDefaults.standard.set(editor.string, forKey: editorKey)
+        if Connections.shared.keeps(endpoint.id) {
+            UserDefaults.standard.set(editor.string, forKey: editorKey)
+        } else {
+            // Removed while open, or never saved: nothing of it is kept (AppKit saves the window's place as it closes).
+            let id = endpoint.id
+            DispatchQueue.main.async { Connections.forget(id) }
+        }
         queries.cancel()
         statusTimer?.invalidate()
         onClose()

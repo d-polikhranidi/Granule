@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // `-ViewerURL <url>`: a window on that server at launch (not saved); `-ViewerRun <SQL>` run in it.
         if let url = UserDefaults.standard.string(forKey: "ViewerURL"), var (endpoint, password) = CHEndpoint.parse(url) {
+            endpoint.id = Connections.debugID(for: url)
             Connections.debugBastion(for: &endpoint)
             // `-ViewerEnvironment production`: that server's environment (its tag and tint).
             endpoint.environment = UserDefaults.standard.string(forKey: "ViewerEnvironment").flatMap(CHEnvironment.init(rawValue:))

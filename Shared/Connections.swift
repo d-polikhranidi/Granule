@@ -49,6 +49,26 @@ final class Connections {
     }
 
     func password(for endpoint: CHEndpoint) -> String { Keychain.password(for: endpoint.id) ?? "" }
+
+    /// The client certificate kept for an endpoint, ready for TLS.
+    func clientIdentity(for endpoint: CHEndpoint) -> CHClientIdentity? {
+        guard endpoint.clientCertificate != nil, let data = Keychain.data(for: endpoint.id, suffix: ".p12") else { return nil }
+        return try? CHClientIdentity(pkcs12: data, password: Keychain.string(for: endpoint.id, suffix: ".p12-password") ?? "")
+    }
+
+    /// A PKCS#12 file's certificate kept for an endpoint (its password checked
+    /// first); the certificate's name, to show.
+    static func storeClientCertificate(_ data: Data, password: String, for id: UUID) throws -> String {
+        let identity = try CHClientIdentity(pkcs12: data, password: password)
+        Keychain.setData(data, for: id, suffix: ".p12")
+        Keychain.setData(Data(password.utf8), for: id, suffix: ".p12-password")
+        return identity.summary
+    }
+
+    static func removeClientCertificate(for id: UUID) {
+        Keychain.removeData(for: id, suffix: ".p12")
+        Keychain.removeData(for: id, suffix: ".p12-password")
+    }
 }
 
 /// Passwords in the Keychain, by connection.
@@ -81,6 +101,42 @@ enum Keychain {
 
     static func removePassword(for id: UUID) {
         SecItemDelete(query(id) as CFDictionary)
+        removeData(for: id, suffix: ".p12")
+        removeData(for: id, suffix: ".p12-password")
+        removeData(for: id, suffix: ".ssh")
+    }
+
+    // Other secrets of a connection (a client certificate, an SSH key), by a suffix of its account.
+
+    private static func query(_ id: UUID, suffix: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: id.uuidString + suffix]
+    }
+
+    static func data(for id: UUID, suffix: String) -> Data? {
+        var query = query(id, suffix: suffix)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        return item as? Data
+    }
+
+    static func string(for id: UUID, suffix: String) -> String? {
+        data(for: id, suffix: suffix).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    static func setData(_ data: Data, for id: UUID, suffix: String) {
+        let status = SecItemUpdate(query(id, suffix: suffix) as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var item = query(id, suffix: suffix)
+            item[kSecValueData as String] = data
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            SecItemAdd(item as CFDictionary, nil)
+        }
+    }
+
+    static func removeData(for id: UUID, suffix: String) {
+        SecItemDelete(query(id, suffix: suffix) as CFDictionary)
     }
 }
 

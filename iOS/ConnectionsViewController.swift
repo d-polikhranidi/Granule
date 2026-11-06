@@ -80,7 +80,7 @@ final class ConnectionsViewController: UICollectionViewController {
 
     /// The server's schema beside its editor and result.
     func open(_ endpoint: CHEndpoint, password: String) {
-        let client = CHClient(endpoint: endpoint, password: password)
+        let client = CHClient(endpoint: endpoint, password: password, identity: Connections.shared.clientIdentity(for: endpoint))
         let query = QueryViewController(endpoint: endpoint, client: client)
         let schema = SchemaViewController(client: client)
         schema.onShowRows = { [weak query] table in query?.showRows(of: table) }

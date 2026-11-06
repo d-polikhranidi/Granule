@@ -1,9 +1,10 @@
 import ClickHouseCore
 import UIKit
+import UniformTypeIdentifiers
 
 /// A connection's form: a URL pasted fills it in; Save keeps it (the
 /// password in the Keychain), Test connects once.
-final class ConnectionFormViewController: UIViewController, UITextFieldDelegate {
+final class ConnectionFormViewController: UIViewController, UITextFieldDelegate, UIDocumentPickerDelegate {
     private var endpoint: CHEndpoint
     private let isNew: Bool
 
@@ -19,6 +20,7 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate 
     private let compressionControl = UISegmentedControl(items: [String(localized: "Automatic"), "LZ4", String(localized: "None")])
     private let fingerprintField = UITextField()
     private let statusLabel = UILabel()
+    private let certificateButton = UIButton(configuration: .bordered())
 
     init(endpoint: CHEndpoint, isNew: Bool) {
         self.endpoint = endpoint
@@ -78,6 +80,7 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate 
             toggle(String(localized: "Read only: run no statements that change data"), readOnlySwitch),
             row(String(localized: "Compression"), compressionControl),
             row(String(localized: "Certificate's SHA-256 (only this one trusted; empty: the system's)"), field(fingerprintField, String(localized: "none"))),
+            row(String(localized: "Client certificate (for servers that ask for one)"), certificateButton),
             statusLabel,
             UIButton(configuration: .bordered(), primaryAction: UIAction(title: String(localized: "Test Connection")) { [weak self] _ in self?.test() }),
         ])
@@ -100,7 +103,61 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate 
             stack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor, constant: 20),
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -20),
         ])
+        certificateButton.addAction(UIAction { [weak self] _ in self?.chooseCertificate() }, for: .primaryActionTriggered)
         fill()
+    }
+
+    private func showCertificate() {
+        var configuration = certificateButton.configuration ?? .bordered()
+        configuration.title = endpoint.clientCertificate ?? String(localized: "Choose a .p12 File…")
+        configuration.subtitle = endpoint.clientCertificate == nil ? nil : String(localized: "Tap to change or remove")
+        certificateButton.configuration = configuration
+    }
+
+    private func chooseCertificate() {
+        guard endpoint.clientCertificate == nil else {
+            let sheet = UIAlertController(title: endpoint.clientCertificate, message: nil, preferredStyle: .actionSheet)
+            sheet.addAction(UIAlertAction(title: String(localized: "Choose Another…"), style: .default) { [weak self] _ in self?.pickCertificate() })
+            sheet.addAction(UIAlertAction(title: String(localized: "Remove"), style: .destructive) { [weak self] _ in
+                guard let self else { return }
+                Connections.removeClientCertificate(for: endpoint.id)
+                endpoint.clientCertificate = nil
+                showCertificate()
+            })
+            sheet.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+            sheet.popoverPresentationController?.sourceView = certificateButton
+            present(sheet, animated: true)
+            return
+        }
+        pickCertificate()
+    }
+
+    private func pickCertificate() {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType(filenameExtension: "p12") ?? .data, UTType(filenameExtension: "pfx") ?? .data])
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { return }
+        let alert = UIAlertController(title: String(localized: "The password of \(url.lastPathComponent)"), message: nil, preferredStyle: .alert)
+        alert.addTextField { $0.isSecureTextEntry = true }
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "OK"), style: .default) { [weak self, weak alert] _ in
+            guard let self else { return }
+            do {
+                endpoint.clientCertificate = try Connections.storeClientCertificate(data, password: alert?.textFields?.first?.text ?? "", for: endpoint.id)
+                showCertificate()
+            } catch {
+                statusLabel.text = (error as? CHClientIdentity.Failure) == .wrongPassword
+                    ? String(localized: "The file's password is wrong.") : String(localized: "The file isn't a PKCS#12 certificate with its key.")
+                statusLabel.textColor = .systemRed
+            }
+        })
+        present(alert, animated: true)
     }
 
     private func fill() {
@@ -114,6 +171,7 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate 
         readOnlySwitch.isOn = endpoint.isReadOnly
         compressionControl.selectedSegmentIndex = CHCompression.allCases.firstIndex(of: endpoint.compression) ?? 0
         if case .pinned(let fingerprint) = endpoint.trust { fingerprintField.text = fingerprint }
+        showCertificate()
     }
 
     private var edited: CHEndpoint {
@@ -152,7 +210,7 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate 
         let endpoint = edited
         statusLabel.text = String(localized: "Connecting…")
         statusLabel.textColor = .secondaryLabel
-        let client = CHClient(endpoint: endpoint, password: passwordField.text ?? "")
+        let client = CHClient(endpoint: endpoint, password: passwordField.text ?? "", identity: Connections.shared.clientIdentity(for: endpoint))
         Task {
             do {
                 let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 15)

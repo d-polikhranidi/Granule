@@ -20,6 +20,9 @@ public struct CHEndpoint: Codable, Sendable, Hashable, Identifiable {
     public var trust: CHTrust
     /// How results are compressed on their way.
     public var compression: CHCompression = .automatic
+    /// The client certificate's name, when the server asks for one (the
+    /// certificate itself is in the Keychain).
+    public var clientCertificate: String?
 
     public init(id: UUID = UUID(), name: String = "", host: String = "localhost", port: Int = 8123, isSecure: Bool = false,
                 user: String = "default", database: String = "", isReadOnly: Bool = false, trust: CHTrust = .system,
@@ -113,6 +116,59 @@ public struct CHEndpoint: Codable, Sendable, Hashable, Identifiable {
         let password = components.password?.removingPercentEncoding ?? item("password")
         components.password = nil
         return (endpoint, password)
+    }
+}
+
+/// A client certificate and its key, for servers that ask for one (mTLS):
+/// from a PKCS#12 file (.p12, .pfx) and its password.
+public struct CHClientIdentity: @unchecked Sendable {
+    public let identity: SecIdentity
+    public let certificates: [SecCertificate]
+
+    public enum Failure: Error, Equatable {
+        case wrongPassword
+        case unreadable(OSStatus)
+    }
+
+    public init(pkcs12 data: Data, password: String) throws {
+        var items: CFArray?
+        let status = SecPKCS12Import(data as CFData, [kSecImportExportPassphrase as String: password] as CFDictionary, &items)
+        guard status == errSecSuccess else { throw status == errSecAuthFailed ? Failure.wrongPassword : Failure.unreadable(status) }
+        guard let first = (items as? [[String: Any]])?.first, let identity = first[kSecImportItemIdentity as String] else {
+            throw Failure.unreadable(errSecItemNotFound)
+        }
+        self.identity = identity as! SecIdentity
+        // The chain after the client's own certificate (the server may need the intermediates).
+        let chain = (first[kSecImportItemCertChain as String] as? [SecCertificate]) ?? []
+        certificates = Array(chain.dropFirst())
+    }
+
+    /// The certificate's subject, to show which one it is.
+    public var summary: String {
+        var certificate: SecCertificate?
+        SecIdentityCopyCertificate(identity, &certificate)
+        return certificate.flatMap { SecCertificateCopySubjectSummary($0) as String? } ?? ""
+    }
+}
+
+/// Answers a server's TLS challenges: its certificate by the endpoint's
+/// trust (for the given host name: the real one when the connection goes
+/// through a tunnel), and a request for a client certificate with ours.
+enum CHAuthentication {
+    static func answer(_ challenge: URLAuthenticationChallenge, trust: CHTrust, identity: CHClientIdentity?, hostname: String?)
+        -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        switch challenge.protectionSpace.authenticationMethod {
+        case NSURLAuthenticationMethodServerTrust:
+            guard let serverTrust = challenge.protectionSpace.serverTrust else { return (.performDefaultHandling, nil) }
+            if let hostname { SecTrustSetPolicies(serverTrust, SecPolicyCreateSSL(true, hostname as CFString)) }
+            if case .system = trust, hostname == nil { return (.performDefaultHandling, nil) }
+            return trust.evaluate(serverTrust) ? (.useCredential, URLCredential(trust: serverTrust)) : (.cancelAuthenticationChallenge, nil)
+        case NSURLAuthenticationMethodClientCertificate:
+            guard let identity else { return (.performDefaultHandling, nil) }
+            return (.useCredential, URLCredential(identity: identity.identity, certificates: identity.certificates, persistence: .forSession))
+        default:
+            return (.performDefaultHandling, nil)
+        }
     }
 }
 

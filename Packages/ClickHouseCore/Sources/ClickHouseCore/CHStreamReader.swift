@@ -191,14 +191,18 @@ final class CHStreamReader: @unchecked Sendable {
 /// A query's session delegate: the response to its reader, the TLS challenge by the endpoint's trust.
 final class CHQueryDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let trust: CHTrust
+    private let identity: CHClientIdentity?
+    private let hostname: String?
     private let reader: CHStreamReader
     var onStop: (() -> Void)? {
         get { reader.onStop }
         set { reader.onStop = newValue }
     }
 
-    init(trust: CHTrust, reader: CHStreamReader) {
+    init(trust: CHTrust, identity: CHClientIdentity?, hostname: String?, reader: CHStreamReader) {
         self.trust = trust
+        self.identity = identity
+        self.hostname = hostname
         self.reader = reader
     }
 
@@ -218,22 +222,15 @@ final class CHQueryDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendab
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let serverTrust = challenge.protectionSpace.serverTrust, trust != .system else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        if trust.evaluate(serverTrust) {
-            completionHandler(.useCredential, URLCredential(trust: serverTrust))
-        } else {
-            completionHandler(.cancelAuthenticationChallenge, nil)
-        }
+        let (disposition, credential) = CHAuthentication.answer(challenge, trust: trust, identity: identity, hostname: hostname)
+        completionHandler(disposition, credential)
     }
 }
 
 /// Writes a response into a file as it comes (Export), and finds the server's error at its end.
 final class CHDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let trust: CHTrust
+    private let identity: CHClientIdentity?
     private let handle: FileHandle
     private let progress: @Sendable (Int) -> Void
     private let continuation: CheckedContinuation<Int, Error>
@@ -244,8 +241,10 @@ final class CHDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sen
     private var written = 0
     private var failure: Error?
 
-    init(trust: CHTrust, handle: FileHandle, progress: @escaping @Sendable (Int) -> Void, continuation: CheckedContinuation<Int, Error>) {
+    init(trust: CHTrust, identity: CHClientIdentity?, handle: FileHandle, progress: @escaping @Sendable (Int) -> Void,
+         continuation: CheckedContinuation<Int, Error>) {
         self.trust = trust
+        self.identity = identity
         self.handle = handle
         self.progress = progress
         self.continuation = continuation
@@ -292,12 +291,7 @@ final class CHDownloadDelegate: NSObject, URLSessionDataDelegate, @unchecked Sen
 
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                     completionHandler: @escaping @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
-              let serverTrust = challenge.protectionSpace.serverTrust, trust != .system else {
-            completionHandler(.performDefaultHandling, nil)
-            return
-        }
-        trust.evaluate(serverTrust) ? completionHandler(.useCredential, URLCredential(trust: serverTrust))
-            : completionHandler(.cancelAuthenticationChallenge, nil)
+        let (disposition, credential) = CHAuthentication.answer(challenge, trust: trust, identity: identity, hostname: nil)
+        completionHandler(disposition, credential)
     }
 }

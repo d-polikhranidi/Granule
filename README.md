@@ -11,7 +11,7 @@ search and scroll at once.
 **Results**
 - Rows show while the query still runs, with the rows read of those expected, the memory used and the server's own figures when it ends. Stop ends the query on the server too.
 - Sort by any column, search every column, and see totals. Selection and sort stay when a view refreshes.
-- Values look the way ClickHouse writes them: times in their column's time zone, exact decimals, arrays, maps, tuples, JSON. A long value opens whole, with JSON laid out.
+- Values look the way ClickHouse writes them: times in their column's time zone, exact decimals, arrays, maps, tuples, JSON. A long value opens whole, with JSON laid out; on the Mac an inspector beside the result shows the value under the cursor and its whole row.
 - Charts of a result: lines over time or bars by category, for millions of points.
 - Export to CSV, TSV, Parquet, Arrow or JSON lines. The server writes the file, so it can be larger than the screen's result.
 

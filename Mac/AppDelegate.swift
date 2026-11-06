@@ -201,6 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         submenu(String(localized: "View"), [
             item(String(localized: "Show Sidebar"), #selector(NSSplitViewController.toggleSidebar(_:)), "s", [.command, .control]),
             item(String(localized: "Show Chart"), #selector(QueryWindowController.toggleChart(_:)), "k", [.command, .shift]),
+            item(String(localized: "Show Inspector"), #selector(NSSplitViewController.toggleInspector(_:)), "i", [.command, .option]),
         ])
         NSApp.windowsMenu = submenu(String(localized: "Window"), [
             item(String(localized: "Minimize"), #selector(NSWindow.performMiniaturize(_:)), "m"),

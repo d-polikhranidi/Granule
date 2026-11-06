@@ -100,6 +100,22 @@ final class ResultTableSource: GHTableViewDataSource {
         return result.blocks[block].columns[columnIndex].text(inBlock, context: context)
     }
 
+    /// Whether a value is NULL.
+    func isNull(row: Int, columnIndex: Int) -> Bool {
+        guard row >= 0, row < result.rowCount, columnIndex < result.names.count else { return false }
+        let (block, inBlock) = result.locate(row)
+        return result.blocks[block].columns[columnIndex].isNull(inBlock)
+    }
+
+    /// A value as its cell shows it (one line, its first characters), `NULL` for none.
+    func shownText(row: Int, columnIndex: Int) -> String {
+        guard row >= 0, row < result.rowCount, columnIndex < result.names.count else { return "" }
+        let (block, inBlock) = result.locate(row)
+        let values = result.blocks[block].columns[columnIndex]
+        if values.isNull(inBlock) { return "NULL" }
+        return values.withText(inBlock, context: context, writer: &writer) { Self.shownText($0) }
+    }
+
     /// A value as a cell shows it: one line (line breaks as marks), the first
     /// `shownLength` characters.
     nonisolated static func shownText(_ bytes: UnsafeRawBufferPointer) -> String {

@@ -27,6 +27,12 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
 
     private let table = GHTableView(frame: .zero)
     private let sidebar = SchemaSidebar()
+    /// Beside the result: the focused cell's whole value and its row (View > Show Inspector).
+    private let inspector = ResultInspector()
+    private var inspectorItem: NSSplitViewItem?
+    private var inspectorObservation: NSKeyValueObservation?
+    /// Gingham doesn't say when its cursor moves: looked at after each key and click in the window.
+    private var focusMonitor: Any?
     private let editor = SQLTextView()
     private let textOutput = NSTextView()
     private let planOutline = PlanOutline()
@@ -104,6 +110,23 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         let paneItem = NSSplitViewItem(viewController: pane)
         paneItem.minimumThickness = 480
         split.addSplitViewItem(paneItem)
+        let inspectorItem = NSSplitViewItem(inspectorWithViewController: inspector)
+        inspectorItem.minimumThickness = 240
+        inspectorItem.maximumThickness = 600
+        // Hidden at first; then as the user leaves it (the split's autosave).
+        inspectorItem.isCollapsed = true
+        split.addSplitViewItem(inspectorItem)
+        self.inspectorItem = inspectorItem
+        inspectorObservation = inspectorItem.observe(\.isCollapsed) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.updateInspector() }
+        }
+        inspector.onPickColumn = { [weak self] index in self?.focusColumn(index) }
+        focusMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .leftMouseUp]) { [weak self] event in
+            if let self, event.window === window {
+                DispatchQueue.main.async { [weak self] in self?.updateInspector() }
+            }
+            return event
+        }
         if #available(macOS 26.0, *) {
             // The filter over the schema, and the status under the result: the system's accessories.
             _ = sidebar.view
@@ -144,7 +167,10 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             self?.startStatusTimer()
         }
 
-        queries.onChange = { [weak self] in self?.updateStatus() }
+        queries.onChange = { [weak self] in
+            self?.updateStatus()
+            self?.updateInspector()
+        }
         queries.onText = { [weak self] text in self?.showText(text) }
         queries.onKillFailure = { [weak self] error in
             guard let window = self?.window else { return }
@@ -340,6 +366,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         default: .regular
         }
         table.usesAlternatingRowBackgroundColors = AppearanceSettings.alternatingRows
+        inspector.applyAppearance()
     }
 
     /// The status line as the pane's bottom accessory (macOS 26 and later).
@@ -458,6 +485,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let focusMonitor { NSEvent.removeMonitor(focusMonitor) }
+        focusMonitor = nil
         UserDefaults.standard.set(editor.string, forKey: editorKey)
         queries.cancel()
         statusTimer?.invalidate()
@@ -873,6 +902,35 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         CellInspector.show(text, title: title, relativeTo: frame, of: table)
     }
 
+    /// The inspector on the focused cell (or the selected row's first value), while it shows.
+    private func updateInspector() {
+        guard let inspectorItem, !inspectorItem.isCollapsed else { return }
+        var row = -1, column = -1
+        if let focused = table.focusedCell, let index = Int(focused.columnID) {
+            row = focused.row
+            column = index
+        } else if table.selectedRow >= 0 {
+            row = table.selectedRow
+            column = 0
+        }
+        // The result's table only (not a statement's text, a plan or a chart).
+        let source = table.isHidden ? nil : queries.source
+        inspector.show(source, row: row, columnIndex: column)
+    }
+
+    /// A column picked in the inspector's row: its cell focused in the result, in view.
+    private func focusColumn(_ index: Int) {
+        let row = table.focusedCell?.row ?? table.selectedRow
+        guard row >= 0 else { return }
+        table.focusedCell = GHCellPosition(row: row, columnID: String(index))
+        if let position = table.tableColumns.firstIndex(where: { $0.id == String(index) }) { table.scrollColumnToVisible(position) }
+        updateInspector()
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) {
+        updateInspector()
+    }
+
     /// A right-click on rows: the value, and killing what the rows are (in Running Queries, Mutations).
     func tableView(_ tableView: GHTableView, menuForRows rows: IndexSet, clickedRow: Int?, column: GHTableColumn?) -> NSMenu? {
         guard let source = queries.source else { return nil }
@@ -923,6 +981,16 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         if UserDefaults.standard.bool(forKey: "ViewerKillAll"), let count = queries.source?.result.rowCount, count > 0 {
             FileHandle.standardError.write(Data("VIEWER-ACTION killing \(count) rows\n".utf8))
             queries.kill(rows: IndexSet(0..<count))
+        }
+        // `-ViewerInspector <row>,<column>`: the inspector shown on that cell (result indexes).
+        if let cell = UserDefaults.standard.string(forKey: "ViewerInspector") {
+            let parts = cell.split(separator: ",").compactMap { Int($0) }
+            if parts.count == 2 {
+                table.focusedCell = GHCellPosition(row: parts[0], columnID: String(parts[1]))
+                inspectorItem?.isCollapsed = false
+                window?.makeFirstResponder(table)
+                updateInspector()
+            }
         }
         if let sort = UserDefaults.standard.string(forKey: "ViewerSort") { debugActions.append("sort:" + sort) }
         if let search = UserDefaults.standard.string(forKey: "ViewerSearch") { debugActions.append("search:" + search) }
@@ -1045,7 +1113,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     // HIG: at most three groups, the main action prominent on the trailing edge, the state in the middle.
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
         [.toggleSidebar, .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace, Self.activityItem, .flexibleSpace,
-         Self.chartItem, Self.exportItem, Self.searchItem, Self.runItem]
+         Self.chartItem, Self.exportItem, Self.searchItem, Self.runItem, .inspectorTrackingSeparator, .flexibleSpace, .toggleInspector]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {

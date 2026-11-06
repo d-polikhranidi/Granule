@@ -30,6 +30,14 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     private let editor = SQLTextView()
     private let textOutput = NSTextView()
     private let planOutline = PlanOutline()
+    /// The result as a chart (View > Show Chart), its columns in the bar above it.
+    private let chart = ChartController()
+    private let chartBar = NSStackView()
+    private let chartX = NSPopUpButton()
+    private let chartY = NSPopUpButton(frame: .zero, pullsDown: true)
+    private let chartKind = NSSegmentedControl(labels: [String(localized: "Automatic"), String(localized: "Line"), String(localized: "Bars")],
+                                               trackingMode: .selectOne, target: nil, action: nil)
+    private var isShowingChart = false
     /// Over the result while a table's details show: its name and which detail.
     private let detailsBar = NSStackView()
     private let detailsTitle = NSTextField(labelWithString: "")
@@ -166,7 +174,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
 
         let results = NSView()
         planOutline.isHidden = true
-        for view in [table, textScroll!, planOutline] as [NSView] {
+        chart.view.isHidden = true
+        for view in [table, textScroll!, planOutline, chart.view] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             results.addSubview(view)
             NSLayoutConstraint.activate([
@@ -183,7 +192,20 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         detailsBar.setViews([detailsTitle, detailsPicker], in: .leading)
         detailsBar.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 2, right: 10)
         detailsBar.isHidden = true
-        let bottom = NSStackView(views: [detailsBar, messageLabel, results, statusLabel])
+        chartX.controlSize = .small
+        chartX.target = self
+        chartX.action = #selector(chartXChanged(_:))
+        chartY.controlSize = .small
+        chartKind.controlSize = .small
+        chartKind.selectedSegment = 0
+        chartKind.target = self
+        chartKind.action = #selector(chartKindChanged(_:))
+        chartBar.setViews([NSTextField(labelWithString: String(localized: "Along:")), chartX,
+                           NSTextField(labelWithString: String(localized: "Measures:")), chartY, chartKind], in: .leading)
+        chartBar.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 2, right: 10)
+        chartBar.isHidden = true
+        chart.onChange = { [weak self] in self?.updateChartMenus() }
+        let bottom = NSStackView(views: [detailsBar, chartBar, messageLabel, results, statusLabel])
         bottom.orientation = .vertical
         bottom.alignment = .leading
         bottom.spacing = 4
@@ -191,6 +213,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         bottom.setCustomSpacing(6, after: results)
         results.widthAnchor.constraint(equalTo: bottom.widthAnchor).isActive = true
         detailsBar.widthAnchor.constraint(equalTo: bottom.widthAnchor).isActive = true
+        chartBar.widthAnchor.constraint(equalTo: bottom.widthAnchor).isActive = true
         for label in [messageLabel, statusLabel] {
             label.translatesAutoresizingMaskIntoConstraints = false
             label.leadingAnchor.constraint(equalTo: bottom.leadingAnchor, constant: 10).isActive = true
@@ -284,6 +307,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                                     TableDetail(rawValue: UserDefaults.standard.string(forKey: "ViewerDetail") ?? "") ?? .overview)
                     }
                 }
+                // `-ViewerChart YES`: the result as a chart.
+                if UserDefaults.standard.bool(forKey: "ViewerChart") { toggleChart(nil) }
                 // `-ViewerPlan <SQL>`: its plan shown (Explain Plan).
                 if let sql = UserDefaults.standard.string(forKey: "ViewerPlan") {
                     editor.string = sql
@@ -488,11 +513,12 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         }
     }
 
-    /// A statement's text output in place of the table (`nil`: the table again).
+    /// A statement's text output in place of the table (`nil`: the table, or the chart, again).
     private func showText(_ text: String?) {
         planOutline.isHidden = true
         textScroll.isHidden = text == nil
-        table.isHidden = text != nil
+        table.isHidden = text != nil || isShowingChart
+        chart.view.isHidden = text != nil || !isShowingChart
         textOutput.string = text ?? ""
     }
 
@@ -501,7 +527,61 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         messageLabel.isHidden = false
     }
 
+    // MARK: Chart
+
+    /// View > Show Chart: the result as a chart in the table's place (and back).
+    @objc func toggleChart(_ sender: Any?) {
+        isShowingChart.toggle()
+        planOutline.isHidden = true
+        textScroll.isHidden = true
+        table.isHidden = isShowingChart
+        chart.view.isHidden = !isShowingChart
+        chartBar.isHidden = !isShowingChart
+        updateChart()
+        window?.toolbar?.validateVisibleItems()
+    }
+
+    private func updateChart() {
+        guard isShowingChart else { return }
+        chart.update(source: queries.source, table: table, isRunning: queries.isRunning, timeZone: client.serverInfo?.zone ?? .gmt)
+    }
+
+    /// The bar's menus: the columns along x, the measures checked.
+    private func updateChartMenus() {
+        chartX.removeAllItems()
+        for column in chart.columns {
+            chartX.addItem(withTitle: column.name)
+            chartX.lastItem?.tag = column.index
+        }
+        if let x = chart.x { chartX.selectItem(withTag: x) }
+        chartY.removeAllItems()
+        let measures = chart.columns.filter { $0.isNumber && $0.index != chart.x }
+        chartY.addItem(withTitle: chart.ys.compactMap { y in chart.columns.first { $0.index == y }?.name }.joined(separator: ", "))
+        for column in measures {
+            let item = NSMenuItem(title: column.name, action: #selector(chartYToggled(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = column.index
+            item.state = chart.ys.contains(column.index) ? .on : .off
+            chartY.menu?.addItem(item)
+        }
+        chartY.isEnabled = !measures.isEmpty
+        updateChart()
+    }
+
+    @objc private func chartXChanged(_ sender: NSPopUpButton) {
+        chart.choose(x: sender.selectedTag())
+    }
+
+    @objc private func chartYToggled(_ sender: NSMenuItem) {
+        chart.toggle(y: sender.tag)
+    }
+
+    @objc private func chartKindChanged(_ sender: NSSegmentedControl) {
+        chart.kind = ChartModel.Kind.allCases[max(0, sender.selectedSegment)]
+    }
+
     private func updateStatus() {
+        updateChart()
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.stringValue = queries.status
         if let error = queries.error {
@@ -803,9 +883,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     private static let historyItem = NSToolbarItem.Identifier("history")
     private static let exportItem = NSToolbarItem.Identifier("export")
     private static let searchItem = NSToolbarItem.Identifier("search")
+    private static let chartItem = NSToolbarItem.Identifier("chart")
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, Self.runItem, Self.stopItem, Self.historyItem, .flexibleSpace, Self.exportItem, Self.searchItem]
+        [.toggleSidebar, .sidebarTrackingSeparator, Self.runItem, Self.stopItem, Self.historyItem, .flexibleSpace, Self.chartItem, Self.exportItem,
+         Self.searchItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -828,6 +910,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         case Self.runItem: return button(String(localized: "Run"), "play.fill", #selector(runStatement(_:)))
         case Self.stopItem: return button(String(localized: "Stop"), "stop.fill", #selector(stopQuery(_:)))
         case Self.exportItem: return button(String(localized: "Export"), "square.and.arrow.up", #selector(exportResult(_:)))
+        case Self.chartItem: return button(String(localized: "Chart"), "chart.xyaxis.line", #selector(toggleChart(_:)))
         case Self.historyItem:
             let item = NSMenuToolbarItem(itemIdentifier: identifier)
             item.label = String(localized: "History")

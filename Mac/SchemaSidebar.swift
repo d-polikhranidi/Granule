@@ -20,6 +20,9 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
     var onChooseCluster: (String?) -> Void = { _ in }
     /// Under the filter: the Server section's scope, when the server has clusters.
     private let scopePopUp = NSPopUpButton()
+    /// The filter and the scope, over the list: the sidebar's top accessory on
+    /// macOS 26 and later (the system's insets and edge effect), else in the view.
+    let filterBar = NSStackView()
 
     private let outline = NSOutlineView()
     private let filterField = NSSearchField()
@@ -76,10 +79,19 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         scopePopUp.action = #selector(scopeChanged(_:))
         scopePopUp.isHidden = true
         scopePopUp.toolTip = String(localized: "What the Server section's views read: this server, or every server of a cluster")
-        let stack = NSStackView(views: [filterField, scopePopUp, scroll])
+        filterBar.setViews([filterField, scopePopUp], in: .top)
+        filterBar.orientation = .vertical
+        filterBar.alignment = .width
+        filterBar.spacing = 6
+        if #available(macOS 26.0, *) {
+            // The source list to the sidebar's edges: it keeps its own insets.
+            view = scroll
+            return
+        }
+        filterBar.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 0, right: 8)
+        let stack = NSStackView(views: [filterBar, scroll])
         stack.orientation = .vertical
         stack.spacing = 6
-        stack.edgeInsets = NSEdgeInsets(top: 6, left: 8, bottom: 0, right: 8)
         stack.translatesAutoresizingMaskIntoConstraints = false
         // Below the title bar (the window's content goes under it).
         let container = NSView()

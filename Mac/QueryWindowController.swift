@@ -49,6 +49,13 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     private var textScroll: NSScrollView!
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
     private let statusLabel = NSTextField(labelWithString: "")
+    /// The toolbar's middle: the server and what the window is doing.
+    private lazy var activity = QueryActivityView(server: endpoint.database.isEmpty ? "\(endpoint.user)@\(endpoint.host)"
+                                                      : "\(endpoint.user)@\(endpoint.host) · \(endpoint.database)",
+                                                  environment: endpoint.environment)
+    /// What the indicator says while no statement runs (the server, once connected).
+    private var idleActivity = String(localized: "Connecting…")
+    private weak var runToolbarItem: NSToolbarItem?
     private let searchField = NSSearchField()
     private var queries: QueryController!
     private let history: QueryHistory
@@ -94,6 +101,16 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         let paneItem = NSSplitViewItem(viewController: pane)
         paneItem.minimumThickness = 480
         split.addSplitViewItem(paneItem)
+        if #available(macOS 26.0, *) {
+            // The filter over the schema, and the status under the result: the system's accessories.
+            _ = sidebar.view
+            let filter = NSSplitViewItemAccessoryViewController()
+            filter.view = sidebar.filterBar
+            sidebarItem.addTopAlignedAccessoryViewController(filter)
+            let status = NSSplitViewItemAccessoryViewController()
+            status.view = statusBar()
+            paneItem.addBottomAlignedAccessoryViewController(status)
+        }
         split.splitView.autosaveName = "QuerySplit"
         window.contentViewController = split
         window.setContentSize(NSSize(width: 1280, height: 820))
@@ -102,6 +119,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         let toolbar = NSToolbar(identifier: "Query")
         toolbar.delegate = self
         toolbar.displayMode = .iconOnly
+        toolbar.centeredItemIdentifiers = [Self.activityItem]
         window.toolbar = toolbar
         window.toolbarStyle = .unified
 
@@ -213,16 +231,19 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         chartBar.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 2, right: 10)
         chartBar.isHidden = true
         chart.onChange = { [weak self] in self?.updateChartMenus() }
-        let bottom = NSStackView(views: [detailsBar, chartBar, messageLabel, results, statusLabel])
+        var bottomViews: [NSView] = [detailsBar, chartBar, messageLabel, results]
+        // Before macOS 26 the status line is under the result here; after, the pane's bottom accessory.
+        if #unavailable(macOS 26.0) { bottomViews.append(statusLabel) }
+        let bottom = NSStackView(views: bottomViews)
         bottom.orientation = .vertical
         bottom.alignment = .leading
         bottom.spacing = 4
         bottom.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 6, right: 0)
-        bottom.setCustomSpacing(6, after: results)
+        if bottomViews.contains(statusLabel) { bottom.setCustomSpacing(6, after: results) } else { bottom.edgeInsets.bottom = 0 }
         results.widthAnchor.constraint(equalTo: bottom.widthAnchor).isActive = true
         detailsBar.widthAnchor.constraint(equalTo: bottom.widthAnchor).isActive = true
         chartBar.widthAnchor.constraint(equalTo: bottom.widthAnchor).isActive = true
-        for label in [messageLabel, statusLabel] {
+        for label in bottomViews.contains(statusLabel) ? [messageLabel, statusLabel] : [messageLabel] {
             label.translatesAutoresizingMaskIntoConstraints = false
             label.leadingAnchor.constraint(equalTo: bottom.leadingAnchor, constant: 10).isActive = true
             label.trailingAnchor.constraint(equalTo: bottom.trailingAnchor, constant: -10).isActive = true
@@ -266,7 +287,40 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             let height = split.arrangedSubviews[0].frame.height
             if height < 120 || height > split.bounds.height * 0.6 { split.setPosition(220, ofDividerAt: 0) }
         }
-        return split
+        // A production server's editor is tinted, so its statements aren't taken for a test one's.
+        if endpoint.environment == .production {
+            editor.backgroundColor = NSColor(name: nil) { appearance in
+                appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? NSColor(srgbRed: 0.24, green: 0.13, blue: 0.13, alpha: 1) : NSColor(srgbRed: 1, green: 0.955, blue: 0.95, alpha: 1)
+            }
+        }
+        guard #available(macOS 26.0, *) else { return split }
+        // Above the status accessory: the table doesn't read safe areas, so it ends where they begin.
+        let container = NSView()
+        split.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(split)
+        NSLayoutConstraint.activate([
+            split.topAnchor.constraint(equalTo: container.topAnchor),
+            split.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            split.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            split.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.bottomAnchor),
+        ])
+        return container
+    }
+
+    /// The status line as the pane's bottom accessory (macOS 26 and later).
+    private func statusBar() -> NSView {
+        let bar = NSView()
+        statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        bar.addSubview(statusLabel)
+        NSLayoutConstraint.activate([
+            statusLabel.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 4),
+            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: bar.trailingAnchor, constant: -4),
+            statusLabel.topAnchor.constraint(equalTo: bar.topAnchor, constant: 2),
+            statusLabel.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -2),
+        ])
+        return bar
     }
 
     // MARK: Connecting
@@ -289,7 +343,9 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                     info = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)
                 }
                 let via = endpoint.ssh.map { String(localized: " via \($0.host)") } ?? ""
-                window?.subtitle = "\(endpoint.host)\(via) · ClickHouse \(info.version.text) · \(info.user)"
+                window?.subtitle = "ClickHouse \(info.version.text)\(via)"
+                idleActivity = String(localized: "Connected · \(info.timeZone)")
+                updateActivity()
                 statusLabel.stringValue = String(localized: "Connected to ClickHouse \(info.version.text) (\(info.timeZone)).")
                 sidebar.reload()
                 window?.makeFirstResponder(editor)
@@ -352,6 +408,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 FileHandle.standardError.write(Data("VIEWER-WINDOW \(window?.windowNumber ?? 0)\n".utf8))
                 #endif
             } catch {
+                idleActivity = String(localized: "Not connected")
+                updateActivity()
                 statusLabel.stringValue = String(localized: "Not connected: \(error.viewerDescription)")
                 statusLabel.textColor = .systemRed
             }
@@ -629,10 +687,25 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         chart.kind = ChartModel.Kind.allCases[max(0, sender.selectedSegment)]
     }
 
+    /// The toolbar's indicator and the Run button (Stop while a statement runs).
+    private func updateActivity() {
+        let running = queries?.isRunning ?? false
+        activity.update(detail: queries?.briefStatus.isEmpty == false ? queries.briefStatus : idleActivity, running: running)
+        guard let runToolbarItem else { return }
+        runToolbarItem.label = running ? String(localized: "Stop") : String(localized: "Run")
+        runToolbarItem.toolTip = running ? String(localized: "Stop (⌘.)") : String(localized: "Run (⌘↩)")
+        runToolbarItem.image = NSImage(systemSymbolName: running ? "stop.fill" : "play.fill", accessibilityDescription: runToolbarItem.label)
+    }
+
+    @objc private func runOrStop(_ sender: Any?) {
+        if queries.isRunning { stopQuery(sender) } else { runStatement(sender) }
+    }
+
     private func updateStatus() {
         updateChart()
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.stringValue = queries.status
+        updateActivity()
         if let error = queries.error {
             show(error)
         }
@@ -933,10 +1006,12 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     private static let exportItem = NSToolbarItem.Identifier("export")
     private static let searchItem = NSToolbarItem.Identifier("search")
     private static let chartItem = NSToolbarItem.Identifier("chart")
+    private static let activityItem = NSToolbarItem.Identifier("activity")
 
+    // HIG: at most three groups, the main action prominent on the trailing edge, the state in the middle.
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, Self.runItem, Self.stopItem, Self.historyItem, .flexibleSpace, Self.chartItem, Self.exportItem,
-         Self.searchItem]
+        [.toggleSidebar, .sidebarTrackingSeparator, Self.historyItem, .flexibleSpace, Self.activityItem, .flexibleSpace,
+         Self.chartItem, Self.exportItem, Self.searchItem, Self.runItem]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -956,7 +1031,19 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             return item
         }
         switch identifier {
-        case Self.runItem: return button(String(localized: "Run"), "play.fill", #selector(runStatement(_:)))
+        case Self.runItem:
+            let item = button(String(localized: "Run"), "play.fill", #selector(runOrStop(_:)))
+            item.toolTip = String(localized: "Run (⌘↩)")
+            if #available(macOS 26.0, *) { item.style = .prominent }
+            item.visibilityPriority = .high
+            runToolbarItem = item
+            return item
+        case Self.activityItem:
+            let item = NSToolbarItem(itemIdentifier: identifier)
+            item.label = String(localized: "Activity")
+            item.view = activity
+            item.visibilityPriority = .high
+            return item
         case Self.stopItem: return button(String(localized: "Stop"), "stop.fill", #selector(stopQuery(_:)))
         case Self.exportItem: return button(String(localized: "Export"), "square.and.arrow.up", #selector(exportResult(_:)))
         case Self.chartItem: return button(String(localized: "Chart"), "chart.xyaxis.line", #selector(toggleChart(_:)))
@@ -1097,3 +1184,57 @@ final class SQLTextView: NSTextView {
         set {}
     }
 }
+
+/// The toolbar's middle, as Xcode shows a build: the server (its environment
+/// as a colored tag) and what the window is doing, a spinner while it runs.
+final class QueryActivityView: NSView {
+    private let tagLabel = NSTextField(labelWithString: "")
+    private let serverLabel = NSTextField(labelWithString: "")
+    private let detailLabel = NSTextField(labelWithString: "")
+    private let spinner = NSProgressIndicator()
+
+    init(server: String, environment: CHEnvironment?) {
+        super.init(frame: NSRect(x: 0, y: 0, width: 440, height: 28))
+        if let environment {
+            let tag = NSMutableAttributedString(string: "● ", attributes: [.foregroundColor: environment.color])
+            tag.append(NSAttributedString(string: environment.title.uppercased(), attributes: [.foregroundColor: environment.color]))
+            tagLabel.attributedStringValue = tag
+        }
+        tagLabel.font = .systemFont(ofSize: 10, weight: .semibold)
+        tagLabel.isHidden = environment == nil
+        serverLabel.stringValue = server
+        serverLabel.font = .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+        serverLabel.lineBreakMode = .byTruncatingMiddle
+        detailLabel.textColor = .secondaryLabelColor
+        detailLabel.lineBreakMode = .byTruncatingTail
+        detailLabel.font = .monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        spinner.style = .spinning
+        spinner.controlSize = .small
+        spinner.isDisplayedWhenStopped = false
+        for label in [serverLabel, detailLabel] { label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
+        let stack = NSStackView(views: [tagLabel, serverLabel, detailLabel, spinner])
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
+            widthAnchor.constraint(lessThanOrEqualToConstant: 560),
+            heightAnchor.constraint(equalToConstant: 28),
+        ])
+        setAccessibilityElement(true)
+        setAccessibilityRole(.staticText)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func update(detail: String, running: Bool) {
+        detailLabel.stringValue = detail
+        if running { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
+        setAccessibilityLabel([tagLabel.isHidden ? nil : tagLabel.stringValue, serverLabel.stringValue, detail].compactMap { $0 }.joined(separator: ", "))
+    }
+}
+

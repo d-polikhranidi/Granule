@@ -137,3 +137,18 @@ struct CHPlanTests {
         #expect((primary.skipped ?? 0) > 0.9)
     }
 }
+
+@Suite(.enabled(if: TestServer.isAvailable, "CH_TEST_URL names no server"), .serialized)
+struct CHPipelineTests {
+    @Test func pipelinesAreReadFromTheirGraph() async throws {
+        let client = try await TestServer.connected()
+        let pipeline = try await client.pipeline(of: "SELECT number % 10 AS k, count() FROM numbers_mt(1000000) GROUP BY k ORDER BY k")
+        #expect(pipeline.nodes.count >= 4)
+        #expect(pipeline.edges.count >= pipeline.nodes.count - 1)
+        #expect(pipeline.nodes.contains { $0.label.hasPrefix("Aggregating") })
+        #expect(pipeline.nodes.allSatisfy { !$0.step.isEmpty })
+        let layers = pipeline.layers
+        // Every edge goes forward a layer or more.
+        #expect(pipeline.edges.allSatisfy { (layers[$0.from] ?? 0) < (layers[$0.to] ?? 0) })
+    }
+}

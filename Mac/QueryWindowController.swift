@@ -53,7 +53,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         guard let window else { return }
         let split = NSSplitViewController()
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
-        sidebarItem.minimumThickness = 200
+        sidebarItem.minimumThickness = 230
         sidebarItem.maximumThickness = 420
         split.addSplitViewItem(sidebarItem)
         let pane = NSViewController()
@@ -76,6 +76,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         sidebar.onShowRows = { [weak self] table in self?.showRows(of: table) }
         sidebar.onShowCreate = { [weak self] table in self?.showCreate(of: table) }
         sidebar.onInsert = { [weak self] text in self?.insert(text) }
+        sidebar.onShowView = { [weak self] view in
+            self?.messageLabel.isHidden = true
+            self?.queries.show(view)
+            self?.startStatusTimer()
+        }
 
         queries.onChange = { [weak self] in self?.updateStatus() }
         queries.onText = { [weak self] text in self?.showText(text) }
@@ -177,6 +182,10 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 sidebar.reload()
                 window?.makeFirstResponder(editor)
                 #if DEBUG
+                // `-ViewerView <name>`: a server view shown (processes, merges, …).
+                if let name = UserDefaults.standard.string(forKey: "ViewerView"), let view = ServerView(rawValue: name) {
+                    sidebar.onShowView(view)
+                }
                 if let sql = UserDefaults.standard.string(forKey: "ViewerRun") {
                     editor.string = sql
                     run(sql)
@@ -223,6 +232,10 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     private func start(_ sql: String, values: [String: String]) {
         messageLabel.isHidden = true
         queries.run(sql, parameters: values)
+        startStatusTimer()
+    }
+
+    private func startStatusTimer() {
         statusTimer?.invalidate()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }
@@ -360,6 +373,34 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         CellInspector.show(text, title: title, relativeTo: frame, of: table)
     }
 
+    /// A right-click on rows: the value, and killing what the rows are (in Running Queries, Mutations).
+    func tableView(_ tableView: GHTableView, menuForRows rows: IndexSet, clickedRow: Int?, column: GHTableColumn?) -> NSMenu? {
+        guard let source = queries.source else { return nil }
+        let menu = NSMenu()
+        if let row = clickedRow, let column, let index = Int(column.id), let text = source.fullText(row: row, columnIndex: index) {
+            menu.addItem(MenuAction(String(localized: "Show Value")) { [weak self] in self?.showValue(nil) }.item)
+            menu.addItem(MenuAction(String(localized: "Copy Value")) {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }.item)
+        }
+        if !rows.isEmpty {
+            menu.addItem(MenuAction(rows.count == 1 ? String(localized: "Copy Row") : String(localized: "Copy \(rows.count.formatted()) Rows")) {
+                [weak tableView] in
+                guard let tableView else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(tableView.copyText(forRows: rows), forType: .string)
+            }.item)
+            if let title = queries.killTitle {
+                menu.addItem(.separator())
+                menu.addItem(MenuAction(rows.count == 1 ? title : "\(title) (\(rows.count.formatted()))") { [weak self] in
+                    self?.queries.kill(rows: rows)
+                }.item)
+            }
+        }
+        return menu.items.isEmpty ? nil : menu
+    }
+
     func tableViewDidChangeActivity(_ tableView: GHTableView) {
         updateStatus()
         #if DEBUG
@@ -378,6 +419,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         guard !debugActionsStarted, case .finished(let stats) = queries.state else { return }
         debugActionsStarted = true
         FileHandle.standardError.write(Data("VIEWER-ACTION result \(stats.rows) rows in \(QueryController.seconds(stats.elapsed)) s, first rows \(stats.firstRows.map(QueryController.seconds) ?? 0) s\n".utf8))
+        // `-ViewerKillAll YES`: every row of the view shown killed (Running Queries, Mutations).
+        if UserDefaults.standard.bool(forKey: "ViewerKillAll"), let count = queries.source?.result.rowCount, count > 0 {
+            FileHandle.standardError.write(Data("VIEWER-ACTION killing \(count) rows\n".utf8))
+            queries.kill(rows: IndexSet(0..<count))
+        }
         if let sort = UserDefaults.standard.string(forKey: "ViewerSort") { debugActions.append("sort:" + sort) }
         if let search = UserDefaults.standard.string(forKey: "ViewerSearch") { debugActions.append("search:" + search) }
         debugNextAction()
@@ -578,6 +624,22 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         replaceEditorText(sql)
         window?.makeFirstResponder(editor)
     }
+}
+
+/// A menu item that runs a closure (kept alive by the item).
+final class MenuAction: NSObject {
+    private let body: () -> Void
+    private(set) var item: NSMenuItem!
+
+    init(_ title: String, _ body: @escaping () -> Void) {
+        self.body = body
+        super.init()
+        item = NSMenuItem(title: title, action: #selector(run(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = self
+    }
+
+    @objc private func run(_ sender: Any?) { body() }
 }
 
 /// The editor: SQL as typed, no smart quotes or substitutions.

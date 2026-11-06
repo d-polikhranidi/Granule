@@ -12,6 +12,8 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
     var onShowCreate: (Schema.Table) -> Void = { _ in }
     /// A name to put in the editor.
     var onInsert: (String) -> Void = { _ in }
+    /// A view of the server to show.
+    var onShowView: (ServerView) -> Void = { _ in }
 
     private let outline = NSOutlineView()
     private let filterField = NSSearchField()
@@ -22,6 +24,8 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
     /// A row of the sidebar.
     final class Item {
         enum Kind {
+            case server
+            case view(ServerView)
             case database(Schema.Database)
             case table(Schema.Table)
             case column(Schema.Column)
@@ -49,6 +53,7 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         outline.dataSource = self
         outline.delegate = self
         outline.target = self
+        outline.action = #selector(clicked(_:))
         outline.doubleAction = #selector(doubleClicked(_:))
         outline.menu = NSMenu()
         outline.menu?.delegate = self
@@ -96,7 +101,8 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
 
     private func rebuild() {
         let words = filter.lowercased()
-        items = schema.databases.compactMap { database in
+        let server = Item(.server, children: ServerView.allCases.map { Item(.view($0)) })
+        items = [server] + schema.databases.compactMap { database in
             let tables = words.isEmpty ? database.tables : database.tables.filter { $0.name.lowercased().contains(words) }
             guard words.isEmpty || !tables.isEmpty || database.name.lowercased().contains(words) else { return nil }
             var shown = database
@@ -104,12 +110,27 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
             return Item(.database(shown), children: tables.map { Item(.table($0)) })
         }
         outline.reloadData()
+        if words.isEmpty, !serverCollapsed { outline.expandItem(server) }
         // The user's databases open; the system's closed (or all open while filtering).
         for item in items {
             if case .database(let database) = item.kind, !database.isSystem || !words.isEmpty || items.count == 1 {
                 outline.expandItem(item)
             }
         }
+    }
+
+    /// Whether the user closed the Server section (it stays closed on reloads).
+    private var serverCollapsed: Bool {
+        get { UserDefaults.standard.bool(forKey: "ServerSectionCollapsed") }
+        set { UserDefaults.standard.set(newValue, forKey: "ServerSectionCollapsed") }
+    }
+
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        if let item = notification.userInfo?["NSObject"] as? Item, case .server = item.kind { serverCollapsed = true }
+    }
+
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        if let item = notification.userInfo?["NSObject"] as? Item, case .server = item.kind { serverCollapsed = false }
     }
 
     @objc private func filterChanged(_ sender: Any?) {
@@ -136,7 +157,7 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
 
     private func isExpandable(_ item: Item) -> Bool {
         switch item.kind {
-        case .database, .table: true
+        case .server, .database, .table: true
         default: false
         }
     }
@@ -168,6 +189,14 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         let title: String, detail: String, symbol: String?
         var toolTip: String?
         switch item.kind {
+        case .server:
+            title = String(localized: "Server")
+            detail = ""
+            symbol = "server.rack"
+        case .view(let view):
+            title = view.title
+            detail = view.isLive ? String(localized: "live") : ""
+            symbol = view.symbol
         case .database(let database):
             title = database.name
             detail = database.tables.count.formatted()
@@ -192,7 +221,7 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         }
         let cell = NSTableCellView()
         let label = NSTextField(labelWithString: title)
-        label.lineBreakMode = .byTruncatingMiddle
+        label.lineBreakMode = .byTruncatingTail
         let detailLabel = NSTextField(labelWithString: detail)
         detailLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         detailLabel.textColor = .secondaryLabelColor
@@ -224,6 +253,11 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
     private var clickedItem: Item? {
         let row = outline.clickedRow >= 0 ? outline.clickedRow : outline.selectedRow
         return outline.item(atRow: row) as? Item
+    }
+
+    @objc private func clicked(_ sender: Any?) {
+        guard let item = clickedItem, case .view(let view) = item.kind else { return }
+        onShowView(view)
     }
 
     @objc private func doubleClicked(_ sender: Any?) {
@@ -259,7 +293,10 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
         case .column(let column):
             add(String(localized: "Insert Name")) { [weak self] in self?.onInsert(CHSQL.quotedName(column.name)) }
             add(String(localized: "Copy Name")) { Self.copy(column.name) }
-        case .message:
+        case .view(let view):
+            add(String(localized: "Show")) { [weak self] in self?.onShowView(view) }
+            add(String(localized: "Insert Statement")) { [weak self] in self?.onInsert(view.sql) }
+        case .server, .message:
             break
         }
         menu.addItem(.separator())

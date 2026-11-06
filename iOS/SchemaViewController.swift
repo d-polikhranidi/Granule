@@ -8,10 +8,13 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
     var onShowRows: (Schema.Table) -> Void = { _ in }
     var onShowCreate: (Schema.Table) -> Void = { _ in }
     var onInsert: (String) -> Void = { _ in }
+    var onShowView: (ServerView) -> Void = { _ in }
 
     /// A row of the outline (unique ids: the same column name in two tables are two rows).
     nonisolated struct Node: Hashable, Sendable {
         enum Kind: Hashable, Sendable {
+            case server
+            case view(ServerView)
             case database(Schema.Database)
             case table(Schema.Table)
             case column(Schema.Column)
@@ -53,6 +56,15 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
         let registration = UICollectionView.CellRegistration<UICollectionViewListCell, Node> { cell, _, node in
             var content = cell.defaultContentConfiguration()
             switch node.kind {
+            case .server:
+                content.text = String(localized: "Server")
+                content.image = UIImage(systemName: "server.rack")
+                cell.accessories = [.outlineDisclosure()]
+            case .view(let view):
+                content.text = view.title
+                content.secondaryText = view.isLive ? String(localized: "live") : nil
+                content.image = UIImage(systemName: view.symbol)
+                cell.accessories = []
             case .database(let database):
                 content.text = database.name
                 content.secondaryText = database.tables.count.formatted()
@@ -111,6 +123,12 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
         loaded = []
         let words = filter.lowercased()
         var snapshot = NSDiffableDataSourceSectionSnapshot<Node>()
+        if words.isEmpty {
+            let server = Node(kind: .server)
+            snapshot.append([server])
+            snapshot.append(ServerView.allCases.map { Node(kind: .view($0)) }, to: server)
+            snapshot.expand([server])
+        }
         for database in schema.databases {
             let tables = words.isEmpty ? database.tables : database.tables.filter { $0.name.lowercased().contains(words) }
             guard words.isEmpty || !tables.isEmpty else { continue }
@@ -163,6 +181,7 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
         guard let node = dataSource.itemIdentifier(for: indexPath) else { return }
         collectionView.deselectItem(at: indexPath, animated: true)
         switch node.kind {
+        case .view(let view): onShowView(view)
         case .table(let table): onShowRows(table)
         case .column(let column): onInsert(CHSQL.quotedName(column.name))
         default: break
@@ -191,7 +210,12 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
                     UIAction(title: String(localized: "Insert Name"), image: UIImage(systemName: "text.insert")) { _ in self.onInsert(CHSQL.quotedName(column.name)) },
                     UIAction(title: String(localized: "Copy Name"), image: UIImage(systemName: "doc.on.doc")) { _ in UIPasteboard.general.string = column.name },
                 ])
-            case .message:
+            case .view(let view):
+                return UIMenu(children: [
+                    UIAction(title: String(localized: "Show"), image: UIImage(systemName: view.symbol)) { _ in self.onShowView(view) },
+                    UIAction(title: String(localized: "Insert Statement"), image: UIImage(systemName: "text.insert")) { _ in self.onInsert(view.sql) },
+                ])
+            case .server, .message:
                 return nil
             }
         })

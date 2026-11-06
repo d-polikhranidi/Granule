@@ -42,6 +42,14 @@ final class QueryController {
     private let sessionID = UUID().uuidString
     private var lastRows = 0
     private(set) var searchText = ""
+    /// The server's view shown (its statement run as is), refreshed while it's live.
+    private(set) var view: ServerView?
+    private var refreshing: Task<Void, Never>?
+    /// When the shown view was last read.
+    private(set) var refreshed: Date?
+    /// The view is being read again (the status stays as it was meanwhile).
+    private var isRefreshing = false
+    private var lastStats: CHQueryStats?
 
     init(client: CHClient, table: GHTableView) {
         self.client = client
@@ -75,6 +83,17 @@ final class QueryController {
     /// with its own `FORMAT`) to `onText`.
     func run(_ sql: String, parameters: [String: String] = [:]) {
         cancel()
+        view = ServerView.view(of: sql)
+        start(sql, parameters: parameters, refresh: false)
+    }
+
+    /// A server view: its rows, read again every two seconds while it's live and shown.
+    func show(_ view: ServerView) {
+        run(view.sql)
+    }
+
+    private func start(_ sql: String, parameters: [String: String], refresh: Bool) {
+        isRefreshing = refresh
         rewrittenColumns = []
         statement = sql
         onText(nil)
@@ -87,7 +106,18 @@ final class QueryController {
         if let format = CHSQL.formatClause(of: sql), format.lowercased() != "native" {
             running = Task { [weak self] in await self?.runForText(sql, parameters: parameters) }
         } else {
-            running = Task { [weak self] in await self?.runForRows(sql, parameters: parameters, rewrites: 0) }
+            running = Task { [weak self] in await self?.runForRows(sql, parameters: parameters, rewrites: 0, refresh: refresh) }
+        }
+    }
+
+    /// The live view run again in two seconds (unless something else runs by then).
+    private func scheduleRefresh() {
+        refreshing?.cancel()
+        guard let view, view.isLive else { return }
+        refreshing = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled, self.view == view, !self.isRunning else { return }
+            self.start(view.sql, parameters: [:], refresh: true)
         }
     }
 
@@ -110,10 +140,10 @@ final class QueryController {
         return .zero
     }
 
-    private func runForRows(_ sql: String, parameters: [String: String], rewrites: Int) async {
+    private func runForRows(_ sql: String, parameters: [String: String], rewrites: Int, refresh: Bool = false) async {
         var options = CHQueryOptions()
         queryID = options.queryID
-        monitor(options.queryID)
+        if view == nil { monitor(options.queryID) }
         options.sessionID = sessionID
         options.parameters = parameters
         let budget = Self.budget
@@ -130,7 +160,7 @@ final class QueryController {
                 switch event {
                 case .result(let result):
                     if !shown {
-                        show(result)
+                        show(result, keepingLayout: refresh)
                         shown = true
                     } else if ContinuousClock.now - lastUpdate > .milliseconds(50) {
                         // More rows, at most 20 times a second (a block is ~65,000 rows).
@@ -147,8 +177,19 @@ final class QueryController {
                         onText(String(localized: "Done."))
                     }
                     state = .finished(stats)
-                    finish()
-                    logged(stats.queryID)
+                    lastStats = stats
+                    isRefreshing = false
+                    if refresh {
+                        table.sortsRows = true
+                    } else {
+                        finish()
+                    }
+                    if view != nil {
+                        refreshed = Date()
+                        scheduleRefresh()
+                    } else {
+                        logged(stats.queryID)
+                    }
                 }
             }
         } catch CHClientError.unsupportedType(let column, let type) where rewrites < 8 && isRead && !column.isEmpty {
@@ -158,10 +199,11 @@ final class QueryController {
             rewrittenColumns.append(column)
             let rewritten = "SELECT * REPLACE (\(expression) AS \(CHSQL.quotedName(column))) FROM (\n\(sql)\n)"
             statement = rewritten
-            await runForRows(rewritten, parameters: parameters, rewrites: rewrites + 1)
+            await runForRows(rewritten, parameters: parameters, rewrites: rewrites + 1, refresh: refresh)
             return
         } catch {
             guard !Task.isCancelled else { return }
+            isRefreshing = false
             state = .failed(error)
             if let latest { add(latest) }
             table.sortsRows = true
@@ -209,13 +251,22 @@ final class QueryController {
         }
     }
 
-    /// The first block (or the header): the table's columns.
-    private func show(_ result: CHResult) {
+    /// The first block (or the header): the table's columns. A view read
+    /// again keeps its columns, sort, search and selection (rows by their id).
+    private func show(_ result: CHResult, keepingLayout: Bool = false) {
+        if keepingLayout, let source, source.result.typeNames == result.typeNames, source.result.names == result.names {
+            source.result = result
+            lastRows = result.rowCount
+            table.reloadData()
+            onChange()
+            return
+        }
         let source = ResultTableSource(result: result, timeZone: client.serverInfo?.zone ?? .gmt)
         self.source = source
         table.sortsRows = false
         table.sortDescriptors = []
         table.rowFilter = nil
+        table.rowIdentifierColumnID = view?.identifierColumn.flatMap { name in result.names.firstIndex(of: name).map(String.init) }
         table.columns = source.columns
         table.dataSource = source
         table.reloadData()
@@ -250,12 +301,38 @@ final class QueryController {
     /// Stops the query (closing its connection; the server is told to kill it).
     func cancel() {
         monitoring?.cancel()
+        refreshing?.cancel()
         guard let running else { return }
         running.cancel()
         self.running = nil
         if isRunning {
             state = .cancelled
             table.sortsRows = true
+            onChange()
+        }
+    }
+
+    // MARK: Killing
+
+    /// What killing the given rows is called, if the view shown can (Kill Query, Kill Mutation).
+    var killTitle: String? { view?.killTitle }
+
+    /// Kills the queries or mutations of the given rows (data source rows), then reads the view again.
+    func kill(rows: IndexSet) {
+        guard let view, let source else { return }
+        let names = source.result.names
+        let statements = rows.compactMap { row in
+            view.killStatement { name in names.firstIndex(of: name).flatMap { source.fullText(row: row, columnIndex: $0) } }
+        }
+        guard !statements.isEmpty else { return }
+        Task { [weak self, client] in
+            var failure: Error?
+            for statement in statements {
+                do { _ = try await client.plainText(statement + " FORMAT Null") } catch { failure = error }
+            }
+            guard let self else { return }
+            if let failure { state = .failed(failure) }
+            if !isRunning { start(view.sql, parameters: [:], refresh: true) }
             onChange()
         }
     }
@@ -280,6 +357,8 @@ final class QueryController {
     var status: String {
         let rows = source?.result.rowCount ?? 0
         var parts: [String] = []
+        var state = state
+        if isRefreshing, let lastStats { state = .finished(lastStats) }
         switch state {
         case .idle:
             return ""
@@ -321,6 +400,10 @@ final class QueryController {
         if table.isSearchingRows, searchText.isEmpty || !isFinished { parts.append(String(localized: "Searching…")) }
         if table.isCopying { parts.append(String(localized: "Copying…")) }
         if table.isExporting { parts.append(String(localized: "Exporting…")) }
+        if let view, let refreshed, !isRunning || isRefreshing {
+            parts.insert(view.title, at: 0)
+            if view.isLive { parts.append(String(localized: "live, read at \(refreshed.formatted(date: .omitted, time: .standard))")) }
+        }
         if !rewrittenColumns.isEmpty {
             parts.append(String(localized: "shown as values: \(rewrittenColumns.joined(separator: ", "))"))
         }

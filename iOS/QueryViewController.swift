@@ -57,10 +57,20 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         view.backgroundColor = .systemBackground
         title = endpoint.title
         navigationItem.largeTitleDisplayMode = .never
+        if #available(iOS 26.0, *) {
+            navigationItem.subtitle = [endpoint.environment?.title, endpoint.database.isEmpty ? nil : endpoint.database]
+                .compactMap { $0 }.joined(separator: " · ")
+        }
         let run = UIBarButtonItem(title: String(localized: "Run"), image: UIImage(systemName: "play.fill"),
                                   primaryAction: UIAction { [weak self] _ in self?.runStatement() })
         let stop = UIBarButtonItem(title: String(localized: "Stop"), image: UIImage(systemName: "stop.fill"),
                                    primaryAction: UIAction { [weak self] _ in self?.queries.cancel() })
+        // The main action, on its own; Run and Stop are the last to go to the overflow menu.
+        if #available(iOS 26.0, *) { run.style = .prominent }
+        if #available(iOS 27.0, *) {
+            run.visibilityPriority = .high
+            stop.visibilityPriority = .high
+        }
         let menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in completion(self?.menuElements() ?? []) }])
         let more = UIBarButtonItem(title: String(localized: "More"), image: UIImage(systemName: "ellipsis"), menu: menu)
         navigationItem.rightBarButtonItems = [more, stop, run]
@@ -86,7 +96,10 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         editor.smartInsertDeleteType = .no
         editor.keyboardType = .asciiCapable
         editor.delegate = self
-        editor.backgroundColor = .secondarySystemBackground
+        // A production server's editor is tinted, so its statements aren't taken for a test one's.
+        editor.backgroundColor = endpoint.environment == .production
+            ? UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.24, green: 0.13, blue: 0.13, alpha: 1) : UIColor(red: 1, green: 0.955, blue: 0.95, alpha: 1) }
+            : AppearanceSettings.theme.background ?? .secondarySystemBackground
         editor.textContainerInset = UIEdgeInsets(top: 8, left: 6, bottom: 8, right: 6)
         editor.text = UserDefaults.standard.string(forKey: "Editor \(endpoint.id.uuidString)") ?? "SELECT version(), uptime(), timezone()\n"
         SQLHighlighting.apply(to: editor.textStorage)
@@ -250,17 +263,24 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     // MARK: Keyboard
 
-    override var keyCommands: [UIKeyCommand]? {
-        [UIKeyCommand(title: String(localized: "Run Statement"), action: #selector(runCommand(_:)), input: "\r", modifierFlags: .command),
-         UIKeyCommand(title: String(localized: "Stop"), action: #selector(stopCommand(_:)), input: ".", modifierFlags: .command),
-         UIKeyCommand(title: String(localized: "Check Statement"), action: #selector(checkCommand(_:)), input: "b", modifierFlags: .command),
-         UIKeyCommand(title: String(localized: "Find in Result"), action: #selector(findCommand(_:)), input: "f", modifierFlags: .command)]
+    // The menu bar's commands (`AppDelegate.buildMenu`): they reach this screen through the responder chain.
+    @objc func runCommand(_ sender: Any?) { runStatement() }
+    @objc func stopCommand(_ sender: Any?) { queries.cancel() }
+    @objc func checkCommand(_ sender: Any?) { checker.checkNow(text: editor.text, cursor: editor.selectedRange.location) }
+    @objc func findCommand(_ sender: Any?) { navigationItem.searchController?.searchBar.becomeFirstResponder() }
+    @objc func explainCommand(_ sender: Any?) {
+        guard let sql = currentStatement() else { return }
+        showPlan(of: sql)
     }
+    @objc func chartCommand(_ sender: Any?) { toggleChart() }
 
-    @objc private func runCommand(_ sender: Any?) { runStatement() }
-    @objc private func stopCommand(_ sender: Any?) { queries.cancel() }
-    @objc private func checkCommand(_ sender: Any?) { checker.checkNow(text: editor.text, cursor: editor.selectedRange.location) }
-    @objc private func findCommand(_ sender: Any?) { navigationItem.searchController?.searchBar.becomeFirstResponder() }
+    /// Stop only while a statement runs (dimmed in the menu bar otherwise, not hidden).
+    override func validate(_ command: UICommand) {
+        super.validate(command)
+        if command.action == #selector(stopCommand(_:)) {
+            command.attributes = queries.isRunning ? [] : [.disabled]
+        }
+    }
 
     // MARK: Running
 

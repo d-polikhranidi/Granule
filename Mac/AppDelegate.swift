@@ -120,6 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         submenu(String(localized: "Query"), [
             item(String(localized: "Run Statement"), #selector(QueryWindowController.runStatement(_:)), "\r"),
             item(String(localized: "Stop"), #selector(QueryWindowController.stopQuery(_:)), "."),
+            item(String(localized: "Check Statement"), #selector(QueryWindowController.checkStatement(_:)), "b"),
             .separator(),
             {
                 let explain = item(String(localized: "Explain Plan"), #selector(QueryWindowController.explainStatement(_:)), "\r", [.command, .option])

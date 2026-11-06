@@ -1,0 +1,58 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "extended-srgb:0.09000,0.11000,0.20000,1.00000",
+      "extended-srgb:0.16000,0.30000,0.56000,1.00000"
+    ]
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "lens.svg",
+          "name": "lens",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.15
+      },
+      "specular": true
+    },
+    {
+      "layers": [
+        {
+          "image-name": "table.svg",
+          "name": "table",
+          "glass": true
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.2
+      },
+      "specular": true,
+      "opacity-specializations": [
+        {
+          "appearance": "tinted",
+          "value": 0.5
+        }
+      ]
+    }
+  ],
+  "supported-platforms": {
+    "circles": [
+      "watchOS"
+    ],
+    "squares": "shared"
+  }
+}

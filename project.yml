@@ -65,7 +65,11 @@ targets:
       base:
         PRODUCT_NAME: Clickhouse Viewer
         PRODUCT_BUNDLE_IDENTIFIER: by.digitalglobe.Clickhouse-Viewer
+        # Shared/AppIcon.icon, an Icon Composer document (a placeholder until the name).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
+        # Apple silicon only, as Gingham's binary.
+        ARCHS: arm64
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
@@ -109,7 +113,10 @@ targets:
       base:
         PRODUCT_NAME: Clickhouse Viewer
         PRODUCT_BUNDLE_IDENTIFIER: by.digitalglobe.Clickhouse-Viewer
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
+        # Gingham's binary has no Intel simulator.
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
       configs:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG

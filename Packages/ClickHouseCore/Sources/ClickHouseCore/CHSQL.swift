@@ -194,7 +194,7 @@ public enum CHSQL {
 
     /// Words shown as keywords (ClickHouse's own list is longer: the
     /// server's `system.keywords` adds the rest for completion).
-    static let keywords: Set<String> = [
+    public static let keywords: Set<String> = [
         "ADD", "AFTER", "ALIAS", "ALL", "ALTER", "AND", "ANTI", "ANY", "ARRAY", "AS", "ASC", "ASOF", "ATTACH", "BETWEEN", "BOTH", "BY",
         "CASE", "CAST", "CHECK", "CLEAR", "CLUSTER", "CODEC", "COLUMN", "COMMENT", "CONSTRAINT", "CREATE", "CROSS", "CUBE", "DATABASE",
         "DATABASES", "DEFAULT", "DELETE", "DESC", "DESCENDING", "DESCRIBE", "DETACH", "DICTIONARY", "DISTINCT", "DROP", "ELSE", "END",

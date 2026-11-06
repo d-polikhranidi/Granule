@@ -24,6 +24,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     private var editorHeight: NSLayoutConstraint!
     private var parameterValues: [String: String] = [:]
     private var historySaved = Set<String>()
+    private var completions: Completions?
+    private let completionBar = CompletionBar()
 
     init(endpoint: CHEndpoint, client: CHClient) {
         self.endpoint = endpoint
@@ -72,6 +74,9 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         editor.textContainerInset = UIEdgeInsets(top: 8, left: 6, bottom: 8, right: 6)
         editor.text = UserDefaults.standard.string(forKey: "Editor \(endpoint.id.uuidString)") ?? "SELECT version(), uptime(), timezone()\n"
         SQLHighlighting.apply(to: editor.textStorage)
+        editor.inputAccessoryView = completionBar
+        completionBar.onRun = { [weak self] in self?.runStatement() }
+        completionBar.onChoose = { [weak self] word in self?.complete(with: word) }
 
         table.delegate = self
         table.allowsMultipleSelection = true
@@ -130,6 +135,20 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                 let info = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)
                 statusLabel.text = String(localized: "Connected to ClickHouse \(info.version.text) (\(info.timeZone)).")
                 onConnected()
+                Task { [weak self, client] in
+                    let completions = await Completions.load(client)
+                    self?.completions = completions
+                    #if DEBUG
+                    // `-ViewerComplete <text>`: the text typed, the editor focused (its completions in the bar).
+                    if let self, let text = UserDefaults.standard.string(forKey: "ViewerComplete") {
+                        self.editor.text = text
+                        SQLHighlighting.apply(to: self.editor.textStorage)
+                        self.editor.becomeFirstResponder()
+                        self.editor.selectedRange = NSRange(location: (text as NSString).length, length: 0)
+                        self.updateCompletions()
+                    }
+                    #endif
+                }
                 #if DEBUG
                 if let sql = UserDefaults.standard.string(forKey: "ViewerRun") {
                     editor.text = sql
@@ -166,16 +185,21 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     // MARK: Running
 
     private func runStatement() {
+        guard let sql = currentStatement() else { return }
+        editor.resignFirstResponder()
+        run(sql)
+    }
+
+    /// The selection, or the statement at the cursor (without its semicolon).
+    private func currentStatement() -> String? {
         let text = editor.text as NSString
         var range = editor.selectedRange
         if range.length == 0 {
-            guard let statement = CHSQL.statement(at: range.location, in: editor.text) else { return }
+            guard let statement = CHSQL.statement(at: range.location, in: editor.text) else { return nil }
             range = statement
         }
         let sql = text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ";")))
-        guard !sql.isEmpty else { return }
-        editor.resignFirstResponder()
-        run(sql)
+        return sql.isEmpty ? nil : sql
     }
 
     private func run(_ sql: String) {
@@ -281,6 +305,35 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         let selection = textView.selectedRange
         SQLHighlighting.apply(to: textView.textStorage)
         textView.selectedRange = selection
+        updateCompletions()
+    }
+
+    func textViewDidChangeSelection(_ textView: UITextView) {
+        updateCompletions()
+    }
+
+    // MARK: Completion
+
+    /// The statement at the cursor.
+    private var statementAtCursor: String {
+        CHSQL.statement(at: editor.selectedRange.location, in: editor.text).map { (editor.text as NSString).substring(with: $0) } ?? ""
+    }
+
+    /// The bar's completions of the word before the cursor (the columns of the statement's tables first).
+    private func updateCompletions() {
+        guard let completions else { return completionBar.show([]) }
+        let partial = Completions.partialWord(in: editor.text as NSString, before: editor.selectedRange.location)
+        guard partial.length >= 1 else { return completionBar.show([]) }
+        let statement = statementAtCursor
+        completions.loadColumns(of: statement, client: client, database: endpoint.database) { [weak self] in self?.updateCompletions() }
+        completionBar.show(completions.matches((editor.text as NSString).substring(with: partial), in: statement))
+    }
+
+    private func complete(with word: String) {
+        let partial = Completions.partialWord(in: editor.text as NSString, before: editor.selectedRange.location)
+        guard let start = editor.position(from: editor.beginningOfDocument, offset: partial.location),
+              let end = editor.position(from: start, offset: partial.length), let range = editor.textRange(from: start, to: end) else { return }
+        editor.replace(range, withText: word)
     }
 
     func updateSearchResults(for searchController: UISearchController) {
@@ -311,11 +364,23 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         let export = UIMenu(title: String(localized: "Export"), image: UIImage(systemName: "square.and.arrow.up"), children: formats.map { title, format, ext in
             UIAction(title: title, attributes: canExport ? [] : .disabled) { [weak self] _ in self?.export(format: format, extension: ext) }
         })
+        let explains: [(String, String)] = [
+            (String(localized: "Explain Plan"), "EXPLAIN PLAN indexes = 1 %@ FORMAT TSVRaw"),
+            (String(localized: "Explain Pipeline"), "EXPLAIN PIPELINE %@ FORMAT TSVRaw"),
+            (String(localized: "Explain Estimate"), "EXPLAIN ESTIMATE %@"),
+            (String(localized: "Explain Syntax"), "EXPLAIN SYNTAX %@ FORMAT TSVRaw"),
+        ]
+        let explain = UIMenu(title: String(localized: "Explain"), image: UIImage(systemName: "list.bullet.indent"), children: explains.map { title, form in
+            UIAction(title: title) { [weak self] _ in
+                guard let self, let sql = currentStatement() else { return }
+                run(form.replacingOccurrences(of: "%@", with: sql))
+            }
+        })
         let editorSize = UIMenu(title: String(localized: "Editor"), options: .displayInline, children: [
             UIAction(title: String(localized: "Larger Editor"), image: UIImage(systemName: "arrow.down.to.line")) { [weak self] _ in self?.resizeEditor(by: 120) },
             UIAction(title: String(localized: "Smaller Editor"), image: UIImage(systemName: "arrow.up.to.line")) { [weak self] _ in self?.resizeEditor(by: -120) },
         ])
-        return [historyMenu, export, editorSize]
+        return [historyMenu, explain, export, editorSize]
     }
 
     private func resizeEditor(by delta: CGFloat) {

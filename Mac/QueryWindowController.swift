@@ -7,10 +7,16 @@ import Gingham
 /// writes its own format), the status under it. ⌘↩ runs the statement at the
 /// cursor (or the selection), ⌘. stops it.
 final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSTextStorageDelegate,
-    GHTableViewDelegate, NSSearchFieldDelegate, NSMenuDelegate {
+    NSTextViewDelegate, GHTableViewDelegate, NSSearchFieldDelegate, NSMenuDelegate {
     let endpoint: CHEndpoint
     let client: CHClient
+    let password: String
     var onClose: () -> Void = {}
+    /// A new tab on the same server asked for (File > New Tab, the tab bar's +).
+    var onNewTab: (QueryWindowController) -> Void = { _ in }
+    /// Which of the server's tabs it is (its editor's text is kept by it).
+    var tabNumber = 0
+    private var completions: Completions?
 
     private let table = GHTableView(frame: .zero)
     private let sidebar = SchemaSidebar()
@@ -27,8 +33,10 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     /// The values last given to each parameter, offered again.
     private var parameterValues: [String: String] = [:]
 
-    init(endpoint: CHEndpoint, password: String) {
+    init(endpoint: CHEndpoint, password: String, tabNumber: Int = 0) {
         self.endpoint = endpoint
+        self.password = password
+        self.tabNumber = tabNumber
         client = CHClient(endpoint: endpoint, password: password)
         history = QueryHistory(endpoint: endpoint)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 820),
@@ -97,8 +105,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         editor.autoresizingMask = [.width]
         editor.textContainer?.widthTracksTextView = true
         editor.textStorage?.delegate = self
-        editor.string = UserDefaults.standard.string(forKey: "Editor \(endpoint.id.uuidString)")
-            ?? "SELECT version(), uptime(), timezone()\n"
+        editor.delegate = self
+        editor.string = UserDefaults.standard.string(forKey: editorKey) ?? (tabNumber == 0 ? "SELECT version(), uptime(), timezone()\n" : "")
         if let storage = editor.textStorage { SQLHighlighting.apply(to: storage) }
 
         // The result: the table, or a statement's text, or its error.
@@ -181,6 +189,19 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 statusLabel.stringValue = String(localized: "Connected to ClickHouse \(info.version.text) (\(info.timeZone)).")
                 sidebar.reload()
                 window?.makeFirstResponder(editor)
+                Task { [weak self, client] in
+                    let completions = await Completions.load(client)
+                    self?.completions = completions
+                    self?.editor.completions = completions
+                    #if DEBUG
+                    // `-ViewerComplete <text>`: the text typed and its completions shown.
+                    if let self, let text = UserDefaults.standard.string(forKey: "ViewerComplete") {
+                        self.editor.string = text
+                        self.editor.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+                        completions.loadColumns(of: text, client: self.client, database: "") { [weak self] in self?.editor.complete(nil) }
+                    }
+                    #endif
+                }
                 #if DEBUG
                 // `-ViewerView <name>`: a server view shown (processes, merges, …).
                 if let name = UserDefaults.standard.string(forKey: "ViewerView"), let view = ServerView(rawValue: name) {
@@ -199,8 +220,15 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         }
     }
 
+    /// Where the editor's text is kept between launches.
+    private var editorKey: String { "Editor \(endpoint.id.uuidString)" + (tabNumber == 0 ? "" : " \(tabNumber)") }
+
+    override func newWindowForTab(_ sender: Any?) {
+        onNewTab(self)
+    }
+
     func windowWillClose(_ notification: Notification) {
-        UserDefaults.standard.set(editor.string, forKey: "Editor \(endpoint.id.uuidString)")
+        UserDefaults.standard.set(editor.string, forKey: editorKey)
         queries.cancel()
         statusTimer?.invalidate()
         onClose()
@@ -245,6 +273,41 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
 
     @objc func stopQuery(_ sender: Any?) {
         queries.cancel()
+    }
+
+    /// Query > Explain: the statement at the cursor (or the selection) as the
+    /// server plans it (tag 0: PLAN with its indexes, 1: PIPELINE, 2: ESTIMATE, 3: SYNTAX).
+    @objc func explainStatement(_ sender: Any?) {
+        guard let sql = currentStatement() else { return }
+        let kind = (sender as? NSMenuItem)?.tag ?? 0
+        let explain = switch kind {
+        case 1: "EXPLAIN PIPELINE \(sql) FORMAT TSVRaw"
+        case 2: "EXPLAIN ESTIMATE \(sql)"
+        case 3: "EXPLAIN SYNTAX \(sql) FORMAT TSVRaw"
+        default: "EXPLAIN PLAN indexes = 1 \(sql) FORMAT TSVRaw"
+        }
+        run(explain)
+    }
+
+    /// The selection, or the statement at the cursor (without its semicolon).
+    private func currentStatement() -> String? {
+        let text = editor.string as NSString
+        var range = editor.selectedRange()
+        if range.length == 0 {
+            guard let statement = CHSQL.statement(at: range.location, in: editor.string) else { return nil }
+            range = statement
+        }
+        let sql = text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ";")))
+        return sql.isEmpty ? nil : sql
+    }
+
+    // MARK: Completion
+
+    func textView(_ textView: NSTextView, completions words: [String], forPartialWordRange charRange: NSRange,
+                  indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+        let partial = (textView.string as NSString).substring(with: charRange)
+        let statement = CHSQL.statement(at: charRange.location, in: textView.string).map { (textView.string as NSString).substring(with: $0) } ?? ""
+        return completions?.matches(partial, in: statement) ?? []
     }
 
     /// Values for a statement's `{name:Type}` parameters, in a sheet.
@@ -352,7 +415,15 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             guard let self, let storage = editor.textStorage else { return }
             highlightPending = false
             SQLHighlighting.apply(to: storage)
+            loadStatementColumns()
         }
+    }
+
+    /// The columns of the tables the statement at the cursor reads, for completion.
+    private func loadStatementColumns() {
+        guard let completions, let range = CHSQL.statement(at: editor.selectedRange().location, in: editor.string) else { return }
+        let statement = (editor.string as NSString).substring(with: range)
+        completions.loadColumns(of: statement, client: client, database: endpoint.database) {}
     }
 
     // MARK: The table
@@ -659,6 +730,35 @@ final class SQLTextView: NSTextView {
         textContainerInset = NSSize(width: 6, height: 8)
         usesFindBar = true
         isIncrementalSearchingEnabled = true
+    }
+
+    /// The words completed (once loaded).
+    var completions: Completions?
+    private var isInsertingCompletion = false
+    private var completesAfterChange = false
+
+    /// The name being typed: letters, digits, `_` and `$` back from the cursor.
+    override var rangeForUserCompletion: NSRange {
+        Completions.partialWord(in: string as NSString, before: selectedRange().location)
+    }
+
+    /// Typing a name's second letter (or more) offers its completions.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        super.insertText(string, replacementRange: replacementRange)
+        guard !isInsertingCompletion, let typed = string as? String, typed.count == 1,
+              let scalar = typed.unicodeScalars.first, Completions.isNameCharacter(scalar), selectedRange().length == 0 else { return }
+        let partial = rangeForUserCompletion
+        guard partial.length >= 2, let completions, !completions.matches((self.string as NSString).substring(with: partial)).isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window?.firstResponder === self else { return }
+            self.complete(nil)
+        }
+    }
+
+    override func insertCompletion(_ word: String, forPartialWordRange charRange: NSRange, movement: Int, isFinal flag: Bool) {
+        isInsertingCompletion = true
+        super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: flag)
+        isInsertingCompletion = false
     }
 
     /// Typing keeps the editor's font and color (the highlighting adds the rest).

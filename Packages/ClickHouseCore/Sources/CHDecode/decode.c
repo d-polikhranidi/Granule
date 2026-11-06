@@ -405,40 +405,14 @@ size_t ch_format_ipv6(const uint8_t *bytes, char *out) {
 
 // MARK: Floats
 
-size_t ch_reformat_float(const char *in, size_t count, char *out) {
-    size_t at = 0, i = 0;
-    if (count >= 3 && (in[count - 1] == 'f' || in[count - 1] == 'n')) {
-        // inf, -inf, nan, -nan (ClickHouse: nan without a sign).
-        if (in[count - 1] == 'n') { memcpy(out, "nan", 3); return 3; }
-        memcpy(out, in, count);
-        return count;
-    }
-    if (in[0] == '-') { out[at++] = '-'; i = 1; }
-    // The digits and the power of ten after them: value = 0.digits × 10^point.
-    char digits[40];
-    int digit_count = 0, point = 0, seen_point = 0, exponent = 0;
-    for (; i < count; i++) {
-        char c = in[i];
-        if (c == 'e' || c == 'E') {
-            int sign = 1;
-            i++;
-            if (i < count && (in[i] == '+' || in[i] == '-')) { sign = in[i] == '-' ? -1 : 1; i++; }
-            for (; i < count; i++) exponent = exponent * 10 + (in[i] - '0');
-            exponent *= sign;
-            break;
-        }
-        if (c == '.') { seen_point = 1; continue; }
-        if (digit_count < 40) digits[digit_count++] = c;
-        if (!seen_point) point++;
-    }
-    int lead = 0;
-    while (lead < digit_count - 1 && digits[lead] == '0') { lead++; point--; }
-    int end = digit_count;
-    while (end > lead + 1 && digits[end - 1] == '0') end--;
-    const char *d = digits + lead;
-    int n = end - lead;
-    point += exponent;
-    if (n == 1 && d[0] == '0') { out[at++] = '0'; return at; }
+// Ryu's shortest digits (ryu/d2s.c, ryu/f2s.c).
+void ch_shortest_double(double f, uint64_t *digits, int32_t *exponent);
+void ch_shortest_float(float f, uint32_t *digits, int32_t *exponent);
+
+/// Digits `d` (`n` of them, no leading or trailing zeros) of value 0.d × 10^point, as ClickHouse
+/// writes them (JavaScript's rules): a whole number below 10^21, a fraction above 10^-7, else an exponent.
+static size_t layout_float(const char *d, int n, int point, char *out) {
+    size_t at = 0;
     if (n <= point && point <= 21) {
         memcpy(out + at, d, (size_t)n); at += (size_t)n;
         memset(out + at, '0', (size_t)(point - n)); at += (size_t)(point - n);
@@ -461,6 +435,45 @@ size_t ch_reformat_float(const char *in, size_t count, char *out) {
     return at;
 }
 
+/// nan, inf, -inf, 0 and -0, as ClickHouse writes them (nan without a sign); 0 for other values.
+static size_t format_special(double value, char *out) {
+    if (value != value) { memcpy(out, "nan", 3); return 3; }
+    if (value == INFINITY) { memcpy(out, "inf", 3); return 3; }
+    if (value == -INFINITY) { memcpy(out, "-inf", 4); return 4; }
+    if (value == 0) {
+        if (signbit(value)) { memcpy(out, "-0", 2); return 2; }
+        out[0] = '0';
+        return 1;
+    }
+    return 0;
+}
+
+/// Shortest digits × 10^exponent laid out, after a sign.
+static size_t format_digits(int negative, uint64_t digits, int32_t exponent, char *out) {
+    while (digits % 10 == 0) { digits /= 10; exponent++; }
+    char buffer[24];
+    int n = (int)format_u64(digits, buffer);
+    size_t at = 0;
+    if (negative) out[at++] = '-';
+    return at + layout_float(buffer, n, n + exponent, out + at);
+}
+
+size_t ch_format_float64(double value, char *out) {
+    size_t special = format_special(value, out);
+    if (special) return special;
+    uint64_t digits; int32_t exponent;
+    ch_shortest_double(value, &digits, &exponent);
+    return format_digits(signbit(value), digits, exponent, out);
+}
+
+size_t ch_format_float32(float value, char *out) {
+    size_t special = format_special(value, out);
+    if (special) return special;
+    uint32_t digits; int32_t exponent;
+    ch_shortest_float(value, &digits, &exponent);
+    return format_digits(signbit(value), digits, exponent, out);
+}
+
 // MARK: Text of many values
 
 #define FOR_VALUES(...) do { \
@@ -481,6 +494,20 @@ size_t ch_format_integers(ch_number_kind kind, const void *src, const uint8_t *n
     case CH_U32: FOR_VALUES(at += format_u64(((const uint32_t *)src)[index], out + at));
     case CH_U64: FOR_VALUES(at += format_u64(((const uint64_t *)src)[index], out + at));
     default: FOR_VALUES(at += ch_format_integer(kind, src, index, out + at));
+    }
+}
+
+size_t ch_format_floats(ch_number_kind kind, const void *src, const uint8_t *nulls, size_t start, size_t count,
+                        char *out, uint32_t *ends, uint32_t base) {
+    switch (kind) {
+    case CH_F64: FOR_VALUES(at += ch_format_float64(((const double *)src)[index], out + at));
+    case CH_F32: FOR_VALUES(at += ch_format_float32(((const float *)src)[index], out + at));
+    default: {
+        // BFloat16: the high half of a Float32.
+        const uint16_t *halves = src;
+        FOR_VALUES(uint32_t bits = (uint32_t)halves[index] << 16; float value; memcpy(&value, &bits, 4);
+                   at += ch_format_float32(value, out + at));
+    }
     }
 }
 
@@ -610,4 +637,79 @@ void ch_bucket(const double *x, const double *y, size_t count, double x0, double
         sum[bucket] += py;
         counts[bucket] += 1;
     }
+}
+
+// MARK: Arrays and maps
+
+/// The bytes to escape inside quotes, and what follows their backslash (0: none).
+static const char escapes[256] = {
+    ['\''] = '\'', ['\\'] = '\\', ['\n'] = 'n', ['\t'] = 't', ['\r'] = 'r', [0] = '0', ['\b'] = 'b', ['\f'] = 'f',
+};
+
+/// `text` inside single quotes, escaped (quoting 2), quoted (1) or as it is (0).
+static size_t write_element(const uint8_t *text, size_t count, int quoting, char *out) {
+    size_t at = 0;
+    if (quoting) out[at++] = '\'';
+    if (quoting == 2) {
+        size_t run = 0;
+        for (size_t i = 0; i < count; i++) {
+            char escape = escapes[text[i]];
+            if (!escape) continue;
+            memcpy(out + at, text + run, i - run); at += i - run;
+            out[at++] = '\\';
+            out[at++] = escape;
+            run = i + 1;
+        }
+        if (count > run) { memcpy(out + at, text + run, count - run); at += count - run; }
+    } else if (count) {
+        memcpy(out + at, text, count); at += count;
+    }
+    if (quoting) out[at++] = '\'';
+    return at;
+}
+
+/// Element `e` of texts one after another (`text_ends`), or NULL.
+static size_t write_text(const uint8_t *bytes, const uint32_t *text_ends, const uint8_t *nulls, uint64_t e, int quoting, char *out) {
+    if (nulls && nulls[e]) { memcpy(out, "NULL", 4); return 4; }
+    uint32_t start = e == 0 ? 0 : text_ends[e - 1];
+    return write_element(bytes + start, text_ends[e] - start, quoting, out);
+}
+
+size_t ch_join_arrays(const uint64_t *offsets, size_t start, size_t count, uint64_t first,
+                      const uint8_t *bytes, const uint32_t *text_ends, const uint8_t *nulls, int quoting,
+                      char *out, uint32_t *ends, uint32_t base) {
+    size_t at = 0;
+    for (size_t i = 0; i < count; i++) {
+        size_t row = start + i;
+        uint64_t from = (row == 0 ? 0 : offsets[row - 1]) - first, to = offsets[row] - first;
+        out[at++] = '[';
+        for (uint64_t e = from; e < to; e++) {
+            if (e > from) out[at++] = ',';
+            at += write_text(bytes, text_ends, nulls, e, quoting, out + at);
+        }
+        out[at++] = ']';
+        ends[i] = base + (uint32_t)at;
+    }
+    return at;
+}
+
+size_t ch_join_maps(const uint64_t *offsets, size_t start, size_t count, uint64_t first,
+                    const uint8_t *key_bytes, const uint32_t *key_ends, const uint8_t *key_nulls, int key_quoting,
+                    const uint8_t *value_bytes, const uint32_t *value_ends, const uint8_t *value_nulls, int value_quoting,
+                    char *out, uint32_t *ends, uint32_t base) {
+    size_t at = 0;
+    for (size_t i = 0; i < count; i++) {
+        size_t row = start + i;
+        uint64_t from = (row == 0 ? 0 : offsets[row - 1]) - first, to = offsets[row] - first;
+        out[at++] = '{';
+        for (uint64_t e = from; e < to; e++) {
+            if (e > from) out[at++] = ',';
+            at += write_text(key_bytes, key_ends, key_nulls, e, key_quoting, out + at);
+            out[at++] = ':';
+            at += write_text(value_bytes, value_ends, value_nulls, e, value_quoting, out + at);
+        }
+        out[at++] = '}';
+        ends[i] = base + (uint32_t)at;
+    }
+    return at;
 }

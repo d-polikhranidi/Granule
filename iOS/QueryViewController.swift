@@ -184,20 +184,24 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             self?.present(alert, animated: true)
         }
         applyAppearance()
-        NotificationCenter.default.addObserver(forName: AppearanceSettings.didChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.applyAppearance() }
-        }
+        NotificationCenter.default.addObserver(self, selector: #selector(appearanceDidChange(_:)), name: AppearanceSettings.didChange, object: nil)
         // A live view waits while its window is in the background.
-        for (name, paused) in [(UIScene.didEnterBackgroundNotification, true), (UIScene.willEnterForegroundNotification, false)] {
-            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
-                let scene = (notification.object as AnyObject?).map(ObjectIdentifier.init)
-                MainActor.assumeIsolated {
-                    guard let self, let scene, scene == self.view.window?.windowScene.map(ObjectIdentifier.init) else { return }
-                    self.queries.isPaused = paused
-                }
-            }
-        }
+        NotificationCenter.default.addObserver(self, selector: #selector(sceneDidEnterBackground(_:)), name: UIScene.didEnterBackgroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(sceneWillEnterForeground(_:)), name: UIScene.willEnterForegroundNotification, object: nil)
+        queries.confirmStoppingWrite = { [weak self] proceed in self?.askToStopWrite(then: proceed) }
         connect()
+    }
+
+    @objc private func appearanceDidChange(_ notification: Notification) {
+        applyAppearance()
+    }
+
+    @objc private func sceneDidEnterBackground(_ notification: Notification) {
+        if (notification.object as? UIScene) === view.window?.windowScene { queries.isPaused = true }
+    }
+
+    @objc private func sceneWillEnterForeground(_ notification: Notification) {
+        if (notification.object as? UIScene) === view.window?.windowScene { queries.isPaused = false }
     }
 
     /// Settings > Appearance on the editor and the result: the theme and sizes, dark
@@ -390,53 +394,58 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     }
 
     private func run(_ sql: String) {
-        confirmRun(sql) { [weak self] in self?.askAndStart(sql) }
+        confirmProduction(sql) { [weak self] in self?.askAndStart(sql) }
     }
 
-    /// Asks first when running would stop a statement that changes data halfway, and
-    /// before a statement that drops, deletes or rewrites data on a production server
-    /// that isn't read only (its name typed).
-    private func confirmRun(_ sql: String, then run: @escaping () -> Void) {
-        guard queries.isRunningWrite else { return confirmProduction(sql, then: run) }
-        let alert = UIAlertController(title: String(localized: "A statement that changes data is still running"),
-                                      message: String(localized: "Running another one stops it, and what it already changed stays changed."),
-                                      preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
-        alert.addAction(UIAlertAction(title: String(localized: "Stop It and Run"), style: .destructive) { [weak self] _ in
-            self?.confirmProduction(sql, then: run)
-        })
-        present(alert, animated: true)
+    /// An alert over whatever this window shows (the search's presentation included).
+    private func presentOnTop(_ controller: UIViewController) {
+        var top: UIViewController = self
+        while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
+        top.present(controller, animated: true)
     }
 
+    /// Before a statement that drops, deletes or rewrites data on a production server that
+    /// isn't read only: its name typed.
     private func confirmProduction(_ sql: String, then run: @escaping () -> Void) {
-        guard endpoint.environment == .production, !endpoint.isReadOnly, CHSQL.isDestructive(sql) else { return run() }
-        let name = endpoint.title
-        let firstLine = sql.split(whereSeparator: \.isNewline).first.map(String.init) ?? sql
-        let alert = UIAlertController(title: String(localized: "Change data on the production server?"),
-                                      message: String(localized: "This drops, deletes or rewrites data on \(name):\n\n\(firstLine.count > 120 ? String(firstLine.prefix(120)) + "…" : firstLine)\n\nType the connection's name to run it."),
-                                      preferredStyle: .alert)
+        guard let question = queries.productionQuestion(for: sql) else { return run() }
+        let alert = UIAlertController(title: question.title, message: question.detail, preferredStyle: .alert)
         let runAction = UIAlertAction(title: String(localized: "Run"), style: .destructive) { _ in run() }
         runAction.isEnabled = false
         alert.addTextField { field in
-            field.placeholder = name
+            field.placeholder = question.name
             field.autocapitalizationType = .none
             field.autocorrectionType = .no
+            // Typed as it is: curly quotes or dashes would never match the name.
+            field.smartQuotesType = .no
+            field.smartDashesType = .no
+            field.smartInsertDeleteType = .no
             field.addAction(UIAction { [weak field] _ in
-                runAction.isEnabled = field?.text?.trimmingCharacters(in: .whitespaces) == name
+                runAction.isEnabled = field?.text?.trimmingCharacters(in: .whitespaces) == question.name
             }, for: .editingChanged)
         }
         alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
         alert.addAction(runAction)
-        present(alert, animated: true)
+        presentOnTop(alert)
     }
 
-    /// Kill on rows: asked first (what a killed mutation leaves, across a cluster or not).
-    private func confirmKill(_ rows: IndexSet) {
-        let question = queries.killQuestion(rows: rows.count)
+    /// Before what runs next stops a statement that changes data halfway (`QueryController`
+    /// asks for Run, server views and details alike).
+    private func askToStopWrite(then proceed: @escaping () -> Void) {
+        let alert = UIAlertController(title: String(localized: "A statement that changes data is still running"),
+                                      message: String(localized: "Going on stops it, and what it already changed stays changed."),
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "Stop It and Go On"), style: .destructive) { _ in proceed() })
+        presentOnTop(alert)
+    }
+
+    /// Kill on rows: asked first. The plan was read when the menu opened: a live view's rows move meanwhile.
+    private func confirmKill(_ plan: QueryController.KillPlan) {
+        let question = queries.killQuestion(for: plan)
         let alert = UIAlertController(title: question.title, message: question.detail, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
-        alert.addAction(UIAlertAction(title: String(localized: "Kill"), style: .destructive) { [weak self] _ in self?.queries.kill(rows: rows) })
-        present(alert, animated: true)
+        alert.addAction(UIAlertAction(title: String(localized: "Kill"), style: .destructive) { [weak self] _ in self?.queries.kill(plan) })
+        presentOnTop(alert)
     }
 
     private func askAndStart(_ sql: String) {
@@ -721,7 +730,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                                      : historyItems)
         let formats: [(String, String, String)] = [("CSV", "CSVWithNames", "csv"), ("TSV", "TSVWithNames", "tsv"), ("Parquet", "Parquet", "parquet"),
                                                    ("Arrow", "Arrow", "arrow"), (String(localized: "JSON lines"), "JSONEachRow", "jsonl")]
-        let canExport = queries.statement.map { CHSQL.formatClause(of: $0) == nil } ?? false
+        // Export runs the statement again: a write would run twice.
+        let canExport = queries.canExport
         let export = UIMenu(title: String(localized: "Export"), image: UIImage(systemName: "square.and.arrow.up"), children: formats.map { title, format, ext in
             UIAction(title: title, attributes: canExport ? [] : .disabled) { [weak self] _ in self?.export(format: format, extension: ext) }
         })
@@ -778,7 +788,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     /// The statement run again by the server in a format it makes, into a file to share or save.
     private func export(format: String, extension ext: String) {
-        guard let sql = queries.statement else { return }
+        guard queries.canExport, let sql = queries.statement else { return }
         let file = FileManager.default.temporaryDirectory.appending(path: "result.\(ext)")
         statusLabel.text = String(localized: "Exporting…")
         Task {
@@ -816,9 +826,9 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             items.append(UIAction(title: String(localized: "Copy \(rows.count.formatted()) Rows"), image: UIImage(systemName: "doc.on.clipboard")) { _ in
                 UIPasteboard.general.string = tableView.copyText(forRows: rows)
             })
-            if let title = queries.killTitle {
+            if let title = queries.killTitle, let plan = queries.killPlan(rows: rows) {
                 items.append(UIAction(title: rows.count == 1 ? title + "…" : "\(title) (\(rows.count.formatted()))…", image: UIImage(systemName: "xmark.octagon"),
-                                      attributes: .destructive) { [weak self] _ in self?.confirmKill(rows) })
+                                      attributes: .destructive) { [weak self] _ in self?.confirmKill(plan) })
             }
         }
         return UIMenu(children: items)

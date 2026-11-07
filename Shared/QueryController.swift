@@ -73,18 +73,16 @@ final class QueryController {
         isRunning && view == nil && statement.map { CHSQL.kind(of: $0) == .other } == true
     }
 
-    /// What Kill would stop, for its question: mutations (which keep what they changed) or queries.
-    var killsMutations: Bool { view == .mutations }
-
-    /// The question before killing rows, and what it means.
-    func killQuestion(rows count: Int) -> (title: String, detail: String) {
-        let title = killsMutations
+    /// The question before a Kill, and what it means.
+    func killQuestion(for plan: KillPlan) -> (title: String, detail: String) {
+        let count = plan.statements.count
+        let title = plan.killsMutations
             ? (count == 1 ? String(localized: "Kill this mutation?") : String(localized: "Kill \(count.formatted()) mutations?"))
             : (count == 1 ? String(localized: "Kill this query?") : String(localized: "Kill \(count.formatted()) queries?"))
-        var detail = killsMutations
+        var detail = plan.killsMutations
             ? String(localized: "A killed mutation stops where it is: the parts it already changed stay changed.")
             : String(localized: "The query stops; what it already wrote stays written.")
-        if let cluster { detail += " " + String(localized: "On every server of the cluster \(cluster).") }
+        if let cluster = plan.cluster { detail += " " + String(localized: "On every server of the cluster \(cluster).") }
         return (title, detail)
     }
 
@@ -109,20 +107,56 @@ final class QueryController {
     /// Runs a statement: its rows into the table, or its text (a statement
     /// with its own `FORMAT`) to `onText`.
     func run(_ sql: String, parameters: [String: String] = [:]) {
-        cancel()
-        view = nil
-        start(sql, parameters: parameters, refresh: false)
+        whenWriteMayStop { [weak self] in
+            guard let self else { return }
+            cancel()
+            view = nil
+            start(sql, parameters: parameters, refresh: false)
+        }
     }
 
     /// A server view: its rows, read again every two seconds while it's live
     /// and shown; across the cluster if one is chosen.
     func show(_ view: ServerView) {
-        cancel()
-        self.view = view
-        start(view.sql(cluster: cluster), parameters: [:], refresh: false)
+        whenWriteMayStop { [weak self] in
+            guard let self else { return }
+            cancel()
+            self.view = view
+            start(view.sql(cluster: cluster), parameters: [:], refresh: false)
+        }
+    }
+
+    /// Asked before a statement of the user's that changes data is stopped halfway by
+    /// whatever runs next (Run, a server view, a table's details): call the closure to go on.
+    var confirmStoppingWrite: (@escaping () -> Void) -> Void = { proceed in proceed() }
+
+    private func whenWriteMayStop(_ go: @escaping () -> Void) {
+        guard isRunningWrite else { return go() }
+        confirmStoppingWrite(go)
+    }
+
+    /// Whether Export may run the statement again: only one that reads (a write would run twice).
+    var canExport: Bool {
+        statement.map { CHSQL.kind(of: $0) == .read && CHSQL.formatClause(of: $0) == nil } ?? false
+    }
+
+    /// The question before a statement that drops, deletes or rewrites data on a production
+    /// server that isn't read only (`nil`: none), and the name to type to run it.
+    func productionQuestion(for sql: String) -> (title: String, detail: String, name: String)? {
+        let endpoint = client.endpoint
+        guard endpoint.environment == .production, !endpoint.isReadOnly, CHSQL.isDestructive(sql) else { return nil }
+        // The statement's first line, after the comments before it.
+        let start = CHSQL.tokens(sql).first { $0.kind != .whitespace && $0.kind != .comment }?.range.location ?? 0
+        let rest = (sql as NSString).substring(from: start)
+        var line = rest.split(whereSeparator: \.isNewline).first.map(String.init) ?? rest
+        if line.count > 120 { line = String(line.prefix(120)) + "…" }
+        return (String(localized: "Change data on the production server?"),
+                String(localized: "This drops, deletes or rewrites data on \(endpoint.title):\n\n\(line)\n\nType the connection's name to run it."),
+                endpoint.title)
     }
 
     private func start(_ sql: String, parameters: [String: String], refresh: Bool) {
+        refreshesLive = false
         isRefreshing = refresh
         rewrittenColumns = []
         statement = sql
@@ -143,14 +177,17 @@ final class QueryController {
     /// A live view waits while its window can't be seen (Mac: not on screen;
     /// iPad and iPhone: in the background), and goes on when it can.
     var isPaused = false {
-        didSet { if oldValue, !isPaused { scheduleRefresh() } }
+        didSet { if oldValue, !isPaused, refreshesLive { scheduleRefresh() } }
     }
+    /// Whether the live view is meant to go on: not once it's stopped or a reading failed.
+    private var refreshesLive = false
 
     /// The live view run again in two seconds, ten on ClickHouse Cloud (every query
     /// keeps a service awake), unless something else runs by then or it's paused.
     private func scheduleRefresh() {
         refreshing?.cancel()
         guard let view, view.isLive else { return }
+        refreshesLive = true
         let interval: Duration = client.endpoint.isCloud ? .seconds(10) : .seconds(2)
         refreshing = Task { [weak self] in
             try? await Task.sleep(for: interval)
@@ -358,6 +395,7 @@ final class QueryController {
     func cancel() {
         monitoring?.cancel()
         refreshing?.cancel()
+        refreshesLive = false
         guard let running else { return }
         running.cancel()
         self.running = nil
@@ -374,19 +412,39 @@ final class QueryController {
     var killTitle: String? { view?.killTitle }
 
     /// Kills the queries or mutations of the given rows (data source rows), then reads the view again.
-    func kill(rows: IndexSet) {
-        guard let view, let source else { return }
+    /// What Kill sends for rows, read when they're chosen: a live view's rows move
+    /// while its question is up, so the ids are taken at once.
+    struct KillPlan {
+        fileprivate let view: ServerView
+        fileprivate let statements: [String]
+        fileprivate let localStatements: [String]
+        fileprivate let hosts: [String?]
+        let cluster: String?
+        var killsMutations: Bool { view == .mutations }
+    }
+
+    func killPlan(rows: IndexSet) -> KillPlan? {
+        guard let view, let source else { return nil }
         let names = source.result.names
         let statements = rows.compactMap { row in
             view.killStatement(cluster: cluster) { name in names.firstIndex(of: name).flatMap { source.fullText(row: row, columnIndex: $0) } }
         }
-        guard !statements.isEmpty else { return }
+        guard !statements.isEmpty else { return nil }
         // Without a cluster's Keeper, ON CLUSTER can't run: the rows of this server are killed here,
         // the others' can't be (their servers aren't connected).
         let hosts = rows.map { row in names.firstIndex(of: "host").flatMap { source.fullText(row: row, columnIndex: $0) } }
         let localStatements = rows.compactMap { row in
             view.killStatement { name in names.firstIndex(of: name).flatMap { source.fullText(row: row, columnIndex: $0) } }
         }
+        return KillPlan(view: view, statements: statements, localStatements: localStatements, hosts: hosts, cluster: cluster)
+    }
+
+    func kill(rows: IndexSet) {
+        if let plan = killPlan(rows: rows) { kill(plan) }
+    }
+
+    func kill(_ plan: KillPlan) {
+        let (view, statements, localStatements, hosts) = (plan.view, plan.statements, plan.localStatements, plan.hosts)
         let thisServer = client.serverInfo?.displayName
         Task { [weak self, client] in
             var failure: Error?

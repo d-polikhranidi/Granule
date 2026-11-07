@@ -172,7 +172,12 @@ public final class CHClient: Sendable {
         }
         var settings = settings
         // A user with readonly = 1 may set nothing (and before connect() it isn't known yet).
-        if background, maySetSettings, state.value != nil { settings["log_comment"] = Self.backgroundComment }
+        if let info = state.value, maySetSettings {
+            if background { settings["log_comment"] = Self.backgroundComment }
+            // A read-only connection writes nowhere: statements with their own FORMAT, Export and Kill
+            // too, not only results (readonly = 2 refuses writes and still lets KILL and SET through).
+            if endpoint.isReadOnly, info.readonly == 0, settings["readonly"] == nil { settings["readonly"] = "2" }
+        }
         var items: [URLQueryItem] = []
         let database = database ?? (endpoint.database.isEmpty ? nil : endpoint.database)
         if let database { items.append(URLQueryItem(name: "database", value: database)) }

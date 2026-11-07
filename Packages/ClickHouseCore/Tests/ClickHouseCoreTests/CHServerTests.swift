@@ -66,6 +66,21 @@ struct CHServerTests {
         "'{\"a\": 1, \"b\": {\"c\": \"x\"}}'::JSON",
     ]
 
+    /// Statements laid out by the server, one at a time; comments said to be gone.
+    @Test func statementsAreFormattedByTheServer() async throws {
+        let client = try await TestServer.connected()
+        do {
+            let formatted = try await client.format("select a, b from t where x = {x:UInt8} -- why\n;\nselect 2;")
+            #expect(formatted.text.hasPrefix("SELECT\n    a,\n    b\nFROM t\nWHERE x = {x:UInt8};\n\nSELECT 2"), "\(formatted.text)")
+            #expect(formatted.text.hasSuffix(";"))
+            #expect(formatted.droppedComments)
+            #expect(try await client.format("select 1").text == "SELECT 1")
+        } catch let error as CHServerError where error.code == 46 {
+            // Older servers have no formatQuery.
+            #expect(!(client.serverInfo?.version.isAtLeast(24, 1) ?? true))
+        }
+    }
+
     /// A read-only connection writes nowhere, through statements with their own FORMAT
     /// too; reading and killing still work. (`null()` isn't a probe: readonly lets
     /// writes into table functions through.)

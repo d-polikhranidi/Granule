@@ -317,6 +317,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     @objc func runCommand(_ sender: Any?) { runStatement() }
     @objc func stopCommand(_ sender: Any?) { queries.cancel() }
     @objc func checkCommand(_ sender: Any?) { checker.checkNow(text: editor.text, cursor: editor.selectedRange.location) }
+    @objc func formatCommand(_ sender: Any?) { formatStatement() }
     @objc func findCommand(_ sender: Any?) { navigationItem.searchController?.searchBar.becomeFirstResponder() }
     @objc func explainCommand(_ sender: Any?) {
         guard let sql = currentStatement() else { return }
@@ -759,6 +760,9 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             UIAction(title: String(localized: "Larger Editor"), image: UIImage(systemName: "arrow.down.to.line")) { [weak self] _ in self?.resizeEditor(by: 120) },
             UIAction(title: String(localized: "Smaller Editor"), image: UIImage(systemName: "arrow.up.to.line")) { [weak self] _ in self?.resizeEditor(by: -120) },
         ])
+        let format = UIAction(title: String(localized: "Format Statement"), image: UIImage(systemName: "text.alignleft")) { [weak self] _ in
+            self?.formatStatement()
+        }
         let check = UIAction(title: String(localized: "Check Statement"), image: UIImage(systemName: "checkmark.seal")) { [weak self] _ in
             guard let self else { return }
             checker.checkNow(text: editor.text, cursor: editor.selectedRange.location)
@@ -778,7 +782,34 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             guard let self else { return }
             AppDelegate.presentSettings(from: self)
         }
-        return [chartAction, historyMenu, check, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize, settings]
+        return [chartAction, historyMenu, check, format, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize, settings]
+    }
+
+    /// Format Statement: the selection, or the statement at the cursor, laid out by the server's
+    /// own formatter; Undo takes it back (the formatter drops comments).
+    private func formatStatement() {
+        var range = editor.selectedRange
+        if range.length == 0 {
+            guard let statement = CHSQL.statement(at: range.location, in: editor.text) else { return }
+            range = statement
+        }
+        let text = (editor.text as NSString).substring(with: range)
+        let before = editor.text
+        statusLabel.text = String(localized: "Formatting…")
+        Task {
+            do {
+                let formatted = try await client.format(text)
+                guard editor.text == before else { return statusLabel.text = "" }
+                replace(range, with: formatted.text)
+                statusLabel.text = formatted.droppedComments
+                    ? String(localized: "Formatted. The server's formatter drops comments: Undo brings them back.")
+                    : String(localized: "Formatted.")
+            } catch let error as CHServerError where error.code == 46 {
+                statusLabel.text = String(localized: "This server can't format statements: it has no formatQuery (newer ClickHouse versions do).")
+            } catch {
+                statusLabel.text = String(localized: "Can't format: \(error.viewerSummary)")
+            }
+        }
     }
 
     private func resizeEditor(by delta: CGFloat) {

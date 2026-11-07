@@ -909,6 +909,35 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         checker.checkNow(text: editor.string, cursor: editor.selectedRange().location)
     }
 
+    /// Query > Format Statement (⌃⇧F): the selection, or the statement at the cursor, laid out
+    /// by the server's own formatter. Edit > Undo takes it back (the formatter drops comments).
+    @objc func formatStatement(_ sender: Any?) {
+        var range = editor.selectedRange()
+        if range.length == 0 {
+            guard let statement = CHSQL.statement(at: range.location, in: editor.string) else { return }
+            range = statement
+        }
+        let text = (editor.string as NSString).substring(with: range)
+        let before = editor.string
+        statusLabel.stringValue = String(localized: "Formatting…")
+        Task {
+            do {
+                let formatted = try await client.format(text)
+                // Typed over meanwhile: the place isn't the same text any more.
+                guard editor.string == before else { return statusLabel.stringValue = "" }
+                replace(range, with: formatted.text)
+                editor.setSelectedRange(NSRange(location: range.location, length: (formatted.text as NSString).length))
+                statusLabel.stringValue = formatted.droppedComments
+                    ? String(localized: "Formatted. The server's formatter drops comments: Edit > Undo (⌘Z) brings them back.")
+                    : String(localized: "Formatted.")
+            } catch let error as CHServerError where error.code == 46 {
+                statusLabel.stringValue = String(localized: "This server can't format statements: it has no formatQuery (newer ClickHouse versions do).")
+            } catch {
+                statusLabel.stringValue = String(localized: "Can't format: \(error.viewerSummary)")
+            }
+        }
+    }
+
     /// The problems underlined, the one at the cursor in the bar with its suggestions.
     private func showProblems() {
         guard let storage = editor.textStorage, storage.string == editor.string else { return }
@@ -1274,7 +1303,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         case #selector(stopQuery(_:)): queries.isRunning
         case #selector(exportResult(_:)): queries.canExport
         case #selector(showValue(_:)): queries.source != nil
-        case #selector(checkStatement(_:)): client.serverInfo != nil
+        case #selector(checkStatement(_:)), #selector(formatStatement(_:)): client.serverInfo != nil
         default: true
         }
     }

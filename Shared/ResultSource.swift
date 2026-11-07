@@ -89,6 +89,23 @@ final class ResultTableSource: GHTableViewDataSource {
         return .text(values.withText(inBlock, context: context, writer: &writer) { Self.shownText($0) })
     }
 
+    /// A number column's values for rows at once, block by block as the decoder keeps them
+    /// (NaN for NULL): the range of its data bars or heatmap. Its cells stay ClickHouse's text.
+    func tableView(_ tableView: GHTableView, numbersFor column: GHTableColumn, rows: Range<Int>,
+                   into values: UnsafeMutableBufferPointer<Double>) -> Bool {
+        guard let index = index(of: column), result.types[index].sortsAsNumber, let base = values.baseAddress,
+              rows.upperBound <= result.rowCount else { return false }
+        var row = rows.lowerBound
+        while row < rows.upperBound {
+            let (block, inBlock) = result.locate(row)
+            let count = min(rows.upperBound - row, result.blocks[block].rowCount - inBlock)
+            guard count > 0 else { return false }
+            result.blocks[block].columns[index].numbers(rows: inBlock..<inBlock + count, into: base + (row - rows.lowerBound))
+            row += count
+        }
+        return true
+    }
+
     func columnSource(for tableView: GHTableView) -> (any GHColumnSource)? {
         ResultColumnSource(result: result, timeZone: timeZone)
     }

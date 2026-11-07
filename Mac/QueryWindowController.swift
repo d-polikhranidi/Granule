@@ -1050,6 +1050,19 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 NSPasteboard.general.setString(text, forType: .string)
             }.item)
         }
+        // A number column: its cells as numbers, data bars or a heatmap.
+        if let column, queries.holdsNumbers(column) {
+            let name = column.title
+            let looks = NSMenu()
+            for look in QueryController.CellLook.allCases {
+                let item = MenuAction(look.title) { [weak self] in self?.queries.setLook(look, ofColumn: name) }.item!
+                item.state = queries.look(ofColumn: name) == look ? .on : .off
+                looks.addItem(item)
+            }
+            let parent = NSMenuItem(title: String(localized: "Show “\(name)” As"), action: nil, keyEquivalent: "")
+            parent.submenu = looks
+            menu.addItem(parent)
+        }
         if !rows.isEmpty {
             menu.addItem(MenuAction(rows.count == 1 ? String(localized: "Copy Row") : String(localized: "Copy \(rows.count.formatted()) Rows")) {
                 [weak tableView] in
@@ -1089,6 +1102,14 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         if UserDefaults.standard.bool(forKey: "ViewerKillAll"), let count = queries.source?.result.rowCount, count > 0 {
             FileHandle.standardError.write(Data("VIEWER-ACTION killing \(count) rows\n".utf8))
             queries.kill(rows: IndexSet(0..<count))
+        }
+        // `-ViewerLook <name>=bars|heatmap,…`: those number columns' cells as data bars or a heatmap.
+        if let looks = UserDefaults.standard.string(forKey: "ViewerLook") {
+            for pair in looks.split(separator: ",") {
+                let parts = pair.split(separator: "=").map(String.init)
+                guard parts.count == 2 else { continue }
+                queries.setLook(parts[1] == "heatmap" ? .heatmap : .dataBars, ofColumn: parts[0])
+            }
         }
         // `-ViewerInspector <row>,<column>`: the inspector shown on that cell (result indexes).
         if let cell = UserDefaults.standard.string(forKey: "ViewerInspector") {

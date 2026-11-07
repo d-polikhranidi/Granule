@@ -355,7 +355,7 @@ final class QueryController {
         table.sortDescriptors = []
         table.rowFilter = nil
         table.rowIdentifierColumnID = view?.identifierColumn.flatMap { name in result.names.firstIndex(of: name).map(String.init) }
-        table.columns = source.columns
+        table.columns = withCellLooks(source.columns)
         table.dataSource = source
         table.reloadData()
         lastRows = result.rowCount
@@ -465,6 +465,66 @@ final class QueryController {
             if let failure { onKillFailure(failure) }
             if !isRunning { start(view.sql(cluster: cluster), parameters: [:], refresh: true) }
             onChange()
+        }
+    }
+
+    // MARK: Cell looks
+
+    /// How a number column's cells look: plain, with a bar as long as the value
+    /// (negative ones the other way, in red), or as a heatmap.
+    enum CellLook: CaseIterable {
+        case plain, dataBars, heatmap
+
+        var title: String {
+            switch self {
+            case .plain: String(localized: "Numbers")
+            case .dataBars: String(localized: "Data Bars")
+            case .heatmap: String(localized: "Heatmap")
+            }
+        }
+
+        /// One cool scale without a status color's meaning (red and green say good and bad).
+        var format: GHConditionalFormat? {
+            switch self {
+            case .plain: nil
+            case .dataBars: .dataBar(.blue, negative: .red)
+            case .heatmap: .colorScale(low: .cyan, high: .indigo)
+            }
+        }
+    }
+
+    /// The looks chosen, by column name: kept for the window, so a statement run again
+    /// (or a live view read again) keeps them.
+    private var cellLooks: [String: CellLook] = [:]
+
+    func look(ofColumn name: String) -> CellLook { cellLooks[name] ?? .plain }
+
+    func setLook(_ look: CellLook, ofColumn name: String) {
+        cellLooks[name] = look == .plain ? nil : look
+        table.columns = withCellLooks(table.columns)
+    }
+
+    /// Whether a result's column holds numbers (the looks are for those).
+    func holdsNumbers(_ column: GHTableColumn) -> Bool {
+        guard let source, let index = source.index(of: column) else { return false }
+        return source.result.types[index].isNumeric
+    }
+
+    /// Columns with the looks chosen for their names, the number columns' only.
+    private func withCellLooks(_ items: [GHColumnItem]) -> [GHColumnItem] {
+        func styled(_ column: GHTableColumn) -> GHTableColumn {
+            var column = column
+            column.conditionalFormat = holdsNumbers(column) ? cellLooks[column.title]?.format : nil
+            return column
+        }
+        return items.map { item in
+            switch item {
+            case .column(let column):
+                return .column(styled(column))
+            case .group(var group):
+                group.columns = group.columns.map(styled)
+                return .group(group)
+            }
         }
     }
 

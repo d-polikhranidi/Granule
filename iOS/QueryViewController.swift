@@ -853,6 +853,16 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                 UIPasteboard.general.string = text
             })
         }
+        // A number column: its cells as numbers, data bars or a heatmap.
+        if let column, queries.holdsNumbers(column) {
+            let name = column.title
+            items.append(UIMenu(title: String(localized: "Show “\(name)” As"), image: UIImage(systemName: "chart.bar.xaxis"),
+                                children: QueryController.CellLook.allCases.map { look in
+                UIAction(title: look.title, state: queries.look(ofColumn: name) == look ? .on : .off) { [weak self] _ in
+                    self?.queries.setLook(look, ofColumn: name)
+                }
+            }))
+        }
         if !rows.isEmpty {
             items.append(UIAction(title: String(localized: "Copy \(rows.count.formatted()) Rows"), image: UIImage(systemName: "doc.on.clipboard")) { _ in
                 UIPasteboard.general.string = tableView.copyText(forRows: rows)

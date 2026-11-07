@@ -1,4 +1,4 @@
-# Clickhouse Viewer (working name): a viewer of ClickHouse results of any size
+# Granule: a viewer of ClickHouse results of any size
 # on Gingham's engine, one native app per platform. Made with XcodeGen:
 # `Tools/generate.sh` (or `GINGHAM_SOURCE=local|release xcodegen`).
 #   local:   Gingham's sources from the repository around this one (../..),
@@ -29,7 +29,7 @@ settings:
     SWIFT_EMIT_LOC_STRINGS: YES
     LOCALIZATION_PREFERS_STRING_CATALOGS: YES
 targets:
-  Clickhouse Viewer:
+  Granule:
     type: application
     platform: macOS
     sources: [Mac, Shared]
@@ -41,7 +41,8 @@ targets:
     info:
       path: Mac/Info.plist
       properties:
-        CFBundleDisplayName: Clickhouse Viewer
+        CFBundleDisplayName: Granule
+        CFBundleName: Granule
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.developer-tools
@@ -63,9 +64,9 @@ targets:
         com.apple.security.files.user-selected.read-write: true
     settings:
       base:
-        PRODUCT_NAME: Clickhouse Viewer
+        PRODUCT_NAME: Granule
         PRODUCT_BUNDLE_IDENTIFIER: by.digitalglobe.Clickhouse-Viewer
-        # Shared/AppIcon.icon, an Icon Composer document (a placeholder until the name).
+        # Shared/AppIcon.icon, an Icon Composer document.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: YES
         # Apple silicon only, as Gingham's binary.
@@ -81,7 +82,7 @@ targets:
           CODE_SIGN_IDENTITY: Apple Development
   # The iPad and iPhone app: the Mac's bundle id (one App Store record,
   # Universal Purchase), its own UIKit shell around the same code (Shared).
-  Clickhouse Viewer iOS:
+  Granule iOS:
     type: application
     platform: iOS
     sources: [iOS, Shared]
@@ -93,7 +94,8 @@ targets:
     info:
       path: iOS/Info.plist
       properties:
-        CFBundleDisplayName: Clickhouse Viewer
+        CFBundleDisplayName: Granule
+        CFBundleName: Granule
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         ITSAppUsesNonExemptEncryption: false
@@ -115,7 +117,7 @@ targets:
         com.apple.developer.kernel.increased-memory-limit: true
     settings:
       base:
-        PRODUCT_NAME: Clickhouse Viewer
+        PRODUCT_NAME: Granule
         PRODUCT_BUNDLE_IDENTIFIER: by.digitalglobe.Clickhouse-Viewer
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
@@ -125,18 +127,18 @@ targets:
         Debug:
           SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
 schemes:
-  Clickhouse Viewer:
+  Granule:
     build:
       targets:
-        Clickhouse Viewer: all
+        Granule: all
     run:
       config: Debug
     archive:
       config: Release
-  Clickhouse Viewer iOS:
+  Granule iOS:
     build:
       targets:
-        Clickhouse Viewer iOS: all
+        Granule iOS: all
     run:
       config: Debug
     archive:

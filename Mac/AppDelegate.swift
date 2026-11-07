@@ -128,7 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(item)
             return submenu
         }
-        let name = "Clickhouse Viewer"
+        let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String ?? "Granule"
         submenu(name, [
             item(String(localized: "About \(name)"), #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             .separator(),

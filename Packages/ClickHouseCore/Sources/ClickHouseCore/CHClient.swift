@@ -161,7 +161,7 @@ public final class CHClient: Sendable {
     /// The `log_comment` of the viewer's own queries (progress, checks, completion,
     /// schema, server views): `system.query_log` and `system.processes` keep it, so
     /// the server views leave them out and a DBA can tell them from the user's.
-    public static let backgroundComment = "Clickhouse Viewer: background"
+    public static let backgroundComment = "Granule: background"
 
     /// The request of a statement: the SQL in the body, settings in the URL.
     func request(_ sql: String, settings: [String: String], database: String?, queryID: String? = nil,

@@ -508,7 +508,7 @@ char* d2s(double f) {
   return result;
 }
 
-// ---- Added for Clickhouse Viewer (not part of Ryu) ----
+// ---- Added for Granule (not part of Ryu) ----
 // The shortest digits of a finite, nonzero `f`, its sign dropped:
 // |f| = digits × 10^exponent (digits may end in zeros).
 void ch_shortest_double(double f, uint64_t* digits, int32_t* exponent) {

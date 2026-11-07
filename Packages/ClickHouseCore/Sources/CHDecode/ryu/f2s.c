@@ -344,7 +344,7 @@ char* f2s(float f) {
   return result;
 }
 
-// ---- Added for Clickhouse Viewer (not part of Ryu) ----
+// ---- Added for Granule (not part of Ryu) ----
 // The shortest digits of a finite, nonzero `f`, its sign dropped:
 // |f| = digits × 10^exponent.
 void ch_shortest_float(float f, uint32_t* digits, int32_t* exponent) {

@@ -1,6 +1,4 @@
-# Clickhouse Viewer
-
-*A working name: the app will be renamed before its release.*
+# Granule
 
 A native ClickHouse client for the Mac, iPad and iPhone, made for results of
 any size. Rows appear as they arrive, and tens of millions of them sort,
@@ -64,3 +62,5 @@ The app collects nothing and has no tracking. It talks only to the servers you a
 ## License
 
 MIT (see [LICENSE](LICENSE)), which also lists the third-party code it includes. Gingham is a separate binary under its own license.
+
+ClickHouse is a trademark of ClickHouse, Inc. Granule is an independent client and isn't affiliated with or endorsed by ClickHouse, Inc.

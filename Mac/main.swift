@@ -1,6 +1,6 @@
 import AppKit
 
-// Clickhouse Viewer for the Mac: ClickHouse results of any size, without
+// Granule for the Mac: ClickHouse results of any size, without
 // nibs. A window of saved connections, a window of queries for each one;
 // the menu bar's commands reach the window in front through the responder chain.
 

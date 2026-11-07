@@ -109,7 +109,7 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
         hostKeyStack.alignment = .center
         hostKeyStack.spacing = 8
         sshPasswordRow = row(String(localized: "SSH password"), field(sshPasswordField, String(localized: "Password")))
-        sshKeyRow = row(String(localized: "Private key without a passphrase (ed25519, ECDSA)"), sshKeyButton)
+        sshKeyRow = row(String(localized: "Private key (ed25519, ECDSA)"), sshKeyButton)
         sshHostKeyRow = row(String(localized: "The SSH server's key, as first seen"), hostKeyStack)
         for view in [row(String(localized: "SSH server"), field(sshHostField, "bastion.example.com", keyboard: .URL)),
                      row(String(localized: "SSH port"), field(sshPortField, "22", keyboard: .numberPad)),
@@ -301,8 +301,10 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
         takeKey(text, name: String(localized: "A pasted key"))
     }
 
-    /// A key read and checked now, kept on Save.
+    /// A key read and checked now, kept on Save; one with a passphrase is unlocked first
+    /// (kept so in the Keychain: the passphrase isn't asked again).
     private func takeKey(_ text: String, name: String) {
+        if CHSSHKey.needsPassphrase(text) { return askPassphrase(for: text, name: name, again: false) }
         do {
             _ = try CHSSHKey.parse(text)
             pendingKey = (name, text)
@@ -311,6 +313,30 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
             showStatus((error as? CHSSHKey.Failure)?.description ?? CHSSHKey.Failure.unreadable.description, isError: true)
         }
         showSSH()
+    }
+
+    private func askPassphrase(for text: String, name: String, again: Bool) {
+        let alert = UIAlertController(title: String(localized: "The passphrase of “\(name)”"),
+                                      message: again ? CHSSHKey.Failure.wrongPassphrase.description
+                                          : String(localized: "The key is kept unlocked in the Keychain: the passphrase isn't asked again."),
+                                      preferredStyle: .alert)
+        alert.addTextField { field in
+            field.isSecureTextEntry = true
+            field.textContentType = .password
+        }
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "Unlock"), style: .default) { [weak self, weak alert] _ in
+            guard let self else { return }
+            do {
+                takeKey(try CHSSHKey.unlocked(text, passphrase: alert?.textFields?.first?.text ?? ""), name: name)
+            } catch CHSSHKey.Failure.wrongPassphrase {
+                askPassphrase(for: text, name: name, again: true)
+            } catch {
+                showStatus((error as? CHSSHKey.Failure)?.description ?? CHSSHKey.Failure.unreadable.description, isError: true)
+                showSSH()
+            }
+        })
+        present(alert, animated: true)
     }
 
     /// The bastion's key forgotten: the next connection takes the one it presents.

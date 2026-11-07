@@ -23,12 +23,18 @@ let package = Package(
         .target(
             name: "ClickHouseSSH",
             dependencies: [
+                "CHBcrypt",
                 .product(name: "NIOSSH", package: "swift-nio-ssh"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             swiftSettings: [.enableUpcomingFeature("ApproachableConcurrency")]
+        ),
+        // OpenSSH's KDF for keys with a passphrase (bcrypt_pbkdf) in C: fast in debug builds too.
+        .target(
+            name: "CHBcrypt",
+            cSettings: [.unsafeFlags(["-O3"])]
         ),
         .target(
             name: "ClickHouseCore",

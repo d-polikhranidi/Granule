@@ -210,6 +210,12 @@ public final class CHClient: Sendable {
     /// Whether JSON columns come as their text (24.10+, when settings may be set).
     var readsJSONAsText: Bool { maySetSettings && (state.value?.version.isAtLeast(24, 10) ?? false) }
 
+    /// Whether results come in ClickHouse's own compressed frames: off the local network, and
+    /// in LZ4 only (Apple has no zstd). A user with readonly = 1 can't name the method, and the
+    /// server's may be ZSTD (its default from 26.9, or the user's profile: ClickHouse's public
+    /// playground sends ZSTD, unreadable here): such a user gets plain blocks.
+    var compressesResults: Bool { endpoint.compressesResults && maySetSettings }
+
     /// The parameters and settings every result query gets: Native blocks
     /// (in LZ4 frames off the local network), the layouts the decoder reads,
     /// and for statements that only read, `readonly` (so closing the
@@ -219,13 +225,13 @@ public final class CHClient: Sendable {
             "default_format": "Native",
             "client_protocol_version": String(CHNativeReader.revision),
         ]
-        if endpoint.compressesResults {
+        if compressesResults {
             settings["compress"] = "1"
         }
         guard maySetSettings else { return settings }
         let info = state.value
         settings["enable_http_compression"] = "0"
-        if endpoint.compressesResults { settings["network_compression_method"] = "LZ4" }
+        if compressesResults { settings["network_compression_method"] = "LZ4" }
         if readsJSONAsText { settings["output_format_native_write_json_as_string"] = "1" }
         if let version = info?.version, version.isAtLeast(25, 6) {
             settings["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1"
@@ -265,7 +271,7 @@ public final class CHClient: Sendable {
             // No HTTP compression on top (a user with readonly = 1 can't turn it off by a setting).
             request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
             let reader = CHStreamReader(queryID: options.queryID, maxRows: options.maxRows, maxBytes: options.maxBytes,
-                                        compressed: endpoint.compressesResults, jsonAsText: readsJSONAsText, continuation: continuation)
+                                        compressed: compressesResults, jsonAsText: readsJSONAsText, continuation: continuation)
             let delegate = CHQueryDelegate(trust: endpoint.trust, identity: identity, hostname: tlsHostname, reader: reader)
             // A session of its own: its results are read on its own queue.
             let queue = OperationQueue()

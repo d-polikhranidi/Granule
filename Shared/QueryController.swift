@@ -279,7 +279,7 @@ final class QueryController {
             self.view = view
             isViewersOwn = false
             scriptStep = nil
-            start(view.sql(cluster: cluster), parameters: [:], refresh: false)
+            start(sql(of: view), parameters: [:], refresh: false)
         }
     }
 
@@ -331,6 +331,21 @@ final class QueryController {
         }
     }
 
+    /// A server view's statement, across the cluster chosen; Health without the checks of
+    /// the system tables this user may not read.
+    private func sql(of view: ServerView) -> String {
+        view == .health ? ServerView.healthSQL(cluster: cluster, hiding: healthHidden) : view.sql(cluster: cluster)
+    }
+
+    /// The system tables Health found it may not read (`ACCESS_DENIED`), for this connection.
+    private var healthHidden: Set<String> = []
+
+    /// The system table an `ACCESS_DENIED` names ("the grant SELECT ON system.replicas").
+    nonisolated static func deniedSystemTable(_ message: String) -> String? {
+        guard let match = message.range(of: #"SELECT(\([^)]*\))? ON system\.\w+"#, options: .regularExpression) else { return nil }
+        return message[match].components(separatedBy: "system.").last
+    }
+
     /// A live view waits while its window can't be seen (Mac: not on screen;
     /// iPad and iPhone: in the background), and goes on when it can.
     var isPaused = false {
@@ -349,7 +364,7 @@ final class QueryController {
         refreshing = Task { [weak self] in
             try? await Task.sleep(for: interval)
             guard let self, !Task.isCancelled, self.view == view, !self.isRunning, !self.isPaused else { return }
-            self.start(view.sql(cluster: self.cluster), parameters: [:], refresh: true)
+            self.start(self.sql(of: view), parameters: [:], refresh: true)
         }
     }
 
@@ -427,6 +442,14 @@ final class QueryController {
                     }
                 }
             }
+        } catch let error as CHServerError where error.code == 497 && view == .health
+                    && Self.deniedSystemTable(error.message).map({ !healthHidden.contains($0) }) == true {
+            // A system table this user may not read: Health again without its check.
+            if let table = Self.deniedSystemTable(error.message) { healthHidden.insert(table) }
+            let without = self.sql(of: .health)
+            statement = without
+            await runForRows(without, parameters: parameters, rewrites: rewrites, refresh: refresh)
+            return
         } catch CHClientError.unsupportedType(let column, let type) where rewrites < 8 && isRead && !column.isEmpty {
             // Columns whose bytes can't be read: run it again once with them as their values or
             // text, all of them (the server describes the result without running it), not one a run.
@@ -643,7 +666,7 @@ final class QueryController {
             }
             guard let self else { return }
             if let failure { onKillFailure(failure) }
-            if !isRunning { start(view.sql(cluster: cluster), parameters: [:], refresh: true) }
+            if !isRunning { start(sql(of: view), parameters: [:], refresh: true) }
             onChange()
         }
     }
@@ -772,6 +795,9 @@ final class QueryController {
             }
         case .finished(let stats):
             parts.append(view == .health && rows == 0 ? String(localized: "Nothing needs a look") : rowsText(rows))
+            if view == .health, !healthHidden.isEmpty {
+                parts.append(String(localized: "not checked (this user can't read them): \(healthHidden.sorted().joined(separator: ", "))"))
+            }
             if let first = stats.firstRows, stats.rows > 0 {
                 parts.append(String(localized: "first rows in \(Self.seconds(first).formatted(.number.precision(.fractionLength(3)))) s"))
             }

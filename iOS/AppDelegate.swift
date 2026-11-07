@@ -26,6 +26,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         }
         builder.insertChild(UIMenu(options: .displayInline, children: [
             UIKeyCommand(title: String(localized: "New Connection"), action: #selector(ConnectionsViewController.newConnection(_:)), input: "n", modifierFlags: .command),
+            UICommand(title: String(localized: "Import from clickhouse-client…"), action: #selector(ConnectionsViewController.importFromClient(_:))),
         ]), atStartOfMenu: .file)
         builder.insertSibling(UIMenu(title: String(localized: "Query"), children: [
             UIKeyCommand(title: String(localized: "Run Statement"), action: #selector(QueryViewController.runCommand(_:)), input: "\r", modifierFlags: .command),

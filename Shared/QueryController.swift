@@ -762,7 +762,7 @@ final class QueryController {
                 if progress.memory > 0 { parts.append(String(localized: "\(Self.bytes(progress.memory)) memory")) }
             }
         case .finished(let stats):
-            parts.append(rowsText(rows))
+            parts.append(view == .health && rows == 0 ? String(localized: "Nothing needs a look") : rowsText(rows))
             if let first = stats.firstRows, stats.rows > 0 {
                 parts.append(String(localized: "first rows in \(Self.seconds(first).formatted(.number.precision(.fractionLength(3)))) s"))
             }

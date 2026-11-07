@@ -90,6 +90,20 @@ struct CHServerTests {
         #expect(try await client.unreadableColumns(of: "SELECT {n:UInt8} AS n", parameters: ["n": "1"]).isEmpty)
     }
 
+    /// A session still busy (the query that failed, not yet dropped by a remote server):
+    /// the unreadable columns are named outside it, and a query in it waits until it's free.
+    @Test func aBusySessionIsWaitedFor() async throws {
+        let client = try await TestServer.connected()
+        let session = "viewer-busy-\(UUID().uuidString)"
+        let busy = Task { try await client.plainText("SELECT sleep(1)", sessionID: session) }
+        try await Task.sleep(for: .milliseconds(200))
+        let columns = try await client.unreadableColumns(of: "SELECT sumState(number) AS s FROM numbers(10)", sessionID: session)
+        #expect(columns.map(\.name) == ["s"])
+        let answer = try await client.whenSessionIsFree { try await client.plainText("SELECT 42", sessionID: session) }
+        #expect(answer.trimmingCharacters(in: .whitespacesAndNewlines) == "42")
+        _ = try await busy.value
+    }
+
     /// The rows a query reads, as the server estimates them: a MergeTree table's, fewer for a
     /// condition on its key, none for a table it can't tell (Memory).
     @Test func readsAreEstimated() async throws {

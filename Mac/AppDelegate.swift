@@ -30,6 +30,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Connections.debugBastion(for: &endpoint)
             // `-ViewerEnvironment production`: that server's environment (its tag and tint).
             endpoint.environment = UserDefaults.standard.string(forKey: "ViewerEnvironment").flatMap(CHEnvironment.init(rawValue:))
+            // `-ViewerCompression lz4|none`: as a server off the local network sends results.
+            if let compression = UserDefaults.standard.string(forKey: "ViewerCompression").flatMap(CHCompression.init(rawValue:)) {
+                endpoint.compression = compression
+            }
             let controller = QueryWindowController(endpoint: endpoint, password: password ?? "")
             controller.onNewTab = { [weak self] from in self?.open(from.endpoint, password: from.password, tabOf: from) }
             queryWindows.append(controller)

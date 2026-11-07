@@ -883,7 +883,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             (String(localized: "Explain Pipeline as Text"), "EXPLAIN PIPELINE %@ FORMAT TSVRaw"),
             (String(localized: "Explain Estimate"), "EXPLAIN ESTIMATE %@"),
             (String(localized: "Explain Syntax"), "EXPLAIN SYNTAX %@ FORMAT TSVRaw"),
-        ]
+        ] + (queries.explainsAnalyze ? [(String(localized: "Explain Analyze (Runs It)"), "EXPLAIN ANALYZE %@ FORMAT TSVRaw")] : [])
         let explain = UIMenu(title: String(localized: "Explain"), image: UIImage(systemName: "list.bullet.indent"), children: [plan, pipeline] + explains.map { title, form in
             UIAction(title: title) { [weak self] _ in
                 guard let self, let sql = currentStatement() else { return }

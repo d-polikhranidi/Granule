@@ -217,6 +217,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 explain.tag = 3
                 return explain
             }(),
+            {
+                let explain = item(String(localized: "Explain Analyze (Runs It)"), #selector(QueryWindowController.explainStatement(_:)))
+                explain.tag = 6
+                return explain
+            }(),
             .separator(),
             item(String(localized: "Show Value"), #selector(QueryWindowController.showValue(_:)), " ", [.command]),
             item(String(localized: "Refresh Schema"), #selector(QueryWindowController.refreshSchema(_:)), "r", [.command, .shift]),

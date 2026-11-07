@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.appearance = NSAppearance(named: name == "dark" ? .darkAqua : .aqua)
         }
         // `-ViewerURL <url>`: a window on that server at launch (not saved); `-ViewerRun <SQL>` run in it.
-        if let url = UserDefaults.standard.string(forKey: "ViewerURL"), var (endpoint, password) = CHEndpoint.parse(url) {
+        if let url = UserDefaults.standard.string(forKey: "ViewerURL"), case (var endpoint, let password)? = CHEndpoint.parse(url) {
             endpoint.id = Connections.debugID(for: url)
             Connections.debugBastion(for: &endpoint)
             // `-ViewerEnvironment production`: that server's environment (its tag and tint).

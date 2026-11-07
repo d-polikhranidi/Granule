@@ -27,7 +27,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // `-ViewerNewWindow <url>`: that server saved as Dev server (its id made from the URL) and
         // opened in a window of its own, from the first window only.
         if let url = UserDefaults.standard.string(forKey: "ViewerNewWindow"), activity == nil, UIApplication.shared.openSessions.count == 1,
-           var (endpoint, password) = CHEndpoint.parse(url) {
+           case (var endpoint, let password)? = CHEndpoint.parse(url) {
             endpoint.id = Connections.debugID(for: url)
             endpoint.name = "Dev server"
             Connections.shared.save(endpoint, password: password ?? "")
@@ -46,7 +46,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             DispatchQueue.main.async { connections.newConnection(nil) }
         }
         // `-ViewerURL <url>`: a server opened at launch (not saved); `-ViewerRun <SQL>` run on it.
-        if let url = UserDefaults.standard.string(forKey: "ViewerURL"), var (endpoint, password) = CHEndpoint.parse(url) {
+        if let url = UserDefaults.standard.string(forKey: "ViewerURL"), case (var endpoint, let password)? = CHEndpoint.parse(url) {
             endpoint.id = Connections.debugID(for: url)
             Connections.debugBastion(for: &endpoint)
             endpoint.environment = UserDefaults.standard.string(forKey: "ViewerEnvironment").flatMap(CHEnvironment.init(rawValue:))

@@ -393,7 +393,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     func connect() {
         statusLabel.stringValue = endpoint.isCloud ? String(localized: "Connecting (a sleeping service takes a while to wake)…")
             : String(localized: "Connecting…")
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             do {
                 // Connected already when the connections window checked it.
                 let info: CHServerInfo
@@ -1343,8 +1344,9 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             Task {
                 do {
                     let bytes = try await self.client.download(sql, format: format, to: url, parameters: self.parameterValues) { written in
-                        Task { @MainActor [weak self] in
-                            self?.statusLabel.stringValue = String(localized: "Exporting… \(ByteCountFormatter.string(fromByteCount: Int64(written), countStyle: .file))")
+                        // (The export holds the window until it's done: so does this.)
+                        Task { @MainActor in
+                            self.statusLabel.stringValue = String(localized: "Exporting… \(ByteCountFormatter.string(fromByteCount: Int64(written), countStyle: .file))")
                         }
                     }
                     self.statusLabel.stringValue = String(localized: "Exported \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)) to \(url.lastPathComponent).")

@@ -85,6 +85,10 @@ final class ChartView: PlatformView, MTKViewDelegate {
         #if os(macOS)
         wantsLayer = true
         metal.layer?.isOpaque = true
+        #else
+        // The colors and the text follow the appearance, the screen's scale and the text size.
+        registerForTraitChanges(UITraitCollection.systemTraitsAffectingColorAppearance + [UITraitDisplayScale.self, UITraitPreferredContentSizeCategory.self],
+                                action: #selector(traitsChanged))
         #endif
         addSubview(metal)
         overlay.translatesAutoresizingMaskIntoConstraints = false
@@ -182,8 +186,7 @@ final class ChartView: PlatformView, MTKViewDelegate {
         relayout()
     }
 
-    override func traitCollectionDidChange(_ previous: UITraitCollection?) {
-        super.traitCollectionDidChange(previous)
+    @objc private func traitsChanged() {
         relayout()
     }
 

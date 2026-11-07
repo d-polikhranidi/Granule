@@ -455,6 +455,15 @@ struct CHSSHTunnelTests {
         }
     }
 
+    /// A key with a passphrase (`id_locked`, "secret"), unlocked once, signs in as any other.
+    @Test func aKeyWithAPassphraseOpensATunnel() async throws {
+        var settings = Self.settings(key: "id_locked")
+        settings.privateKey = try CHSSHKey.unlocked(try #require(settings.privateKey), passphrase: "secret")
+        let tunnel = try await CHSSHTunnel.open(settings, target: Self.target.0, targetPort: Self.target.1)
+        #expect(try await Self.query(through: tunnel) == "\(Self.target.0) 1000000")
+        tunnel.close()
+    }
+
     /// The SSH connection drops (sleep, the bastion's idle limit): the same client goes on, through a new one.
     @Test func aDroppedConnectionIsMadeAgain() async throws {
         let tunnel = try await CHSSHTunnel.open(Self.settings(password: "viewer"), target: Self.target.0, targetPort: Self.target.1)
@@ -507,6 +516,6 @@ struct CHSSHTunnelTests {
         } catch let failure as CHSSHTunnel.Failure {
             if case .hostKeyChanged = failure {} else { Issue.record("\(failure)") }
         }
-        #expect(throws: CHSSHKey.Failure.encrypted) { _ = try CHSSHKey.parse(Self.settings(key: "id_locked").privateKey ?? "") }
+        #expect(throws: CHSSHKey.Failure.needsPassphrase) { _ = try CHSSHKey.parse(Self.settings(key: "id_locked").privateKey ?? "") }
     }
 }

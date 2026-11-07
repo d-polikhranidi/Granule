@@ -540,17 +540,56 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
     private func chooseKey() {
         guard let window else { return }
         let panel = NSOpenPanel()
-        panel.message = String(localized: "A private key without a passphrase (ed25519 or ECDSA), such as ~/.ssh/id_ed25519")
+        panel.message = String(localized: "A private key (ed25519 or ECDSA), such as ~/.ssh/id_ed25519")
         panel.showsHiddenFiles = true
-        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".ssh")
+        // (The sandbox's home is its container: the user's is the password database's.)
+        if let home = getpwuid(getuid())?.pointee.pw_dir {
+            panel.directoryURL = URL(fileURLWithPath: String(cString: home)).appending(path: ".ssh")
+        }
         panel.beginSheetModal(for: window) { [weak self] response in
             guard let self, response == .OK, let url = panel.url else { return }
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                return form.setStatus(CHSSHKey.Failure.unreadable.description, isError: true)
+            }
+            if CHSSHKey.needsPassphrase(text) {
+                // The sheet of the panel goes first.
+                DispatchQueue.main.async { self.askPassphrase(for: text, name: url.lastPathComponent) }
+            } else {
+                takeKey(text, name: url.lastPathComponent)
+            }
+        }
+    }
+
+    private func takeKey(_ text: String, name: String) {
+        do {
+            _ = try CHSSHKey.parse(text)
+            form.pendingKey = ConnectionForm.PendingKey(name: name, text: text)
+            form.setStatus("")
+            save()
+        } catch {
+            form.setStatus((error as? CHSSHKey.Failure)?.description ?? CHSSHKey.Failure.unreadable.description, isError: true)
+        }
+    }
+
+    /// A key with a passphrase: asked once, the key kept unlocked in the Keychain (as
+    /// `ssh-add --apple-use-keychain` keeps a passphrase there).
+    private func askPassphrase(for text: String, name: String, again: Bool = false) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "The passphrase of “\(name)”")
+        alert.informativeText = again ? CHSSHKey.Failure.wrongPassphrase.description
+            : String(localized: "The key is kept unlocked in the Keychain: the passphrase isn't asked again.")
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        alert.accessoryView = field
+        alert.addButton(withTitle: String(localized: "Unlock"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
             do {
-                let text = try String(contentsOf: url, encoding: .utf8)
-                _ = try CHSSHKey.parse(text)
-                form.pendingKey = ConnectionForm.PendingKey(name: url.lastPathComponent, text: text)
-                form.setStatus("")
-                save()
+                takeKey(try CHSSHKey.unlocked(text, passphrase: field.stringValue), name: name)
+            } catch CHSSHKey.Failure.wrongPassphrase {
+                DispatchQueue.main.async { self.askPassphrase(for: text, name: name, again: true) }
             } catch {
                 form.setStatus((error as? CHSSHKey.Failure)?.description ?? CHSSHKey.Failure.unreadable.description, isError: true)
             }

@@ -31,3 +31,6 @@ Packages/ClickHouseCore/Sources/CHDecode/ryu holds Ryu by Ulf Adams, under the
 Boost Software License 1.0 (its LICENSE-Boost there). The SSH tunnels use
 Apple's swift-nio, swift-nio-ssh and swift-crypto (Apache License 2.0), fetched
 by Swift Package Manager.
+Packages/ClickHouseCore/Sources/CHBcrypt is this repository's own code (MIT):
+OpenBSD's bcrypt_pbkdf written again after its description, for OpenSSH keys
+with a passphrase; Blowfish's initial tables are the hex digits of pi.

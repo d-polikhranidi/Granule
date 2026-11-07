@@ -1,58 +1,28 @@
 {
   "fill": {
     "linear-gradient": [
-      "extended-srgb:0.09000,0.11000,0.20000,1.00000",
-      "extended-srgb:0.16000,0.30000,0.56000,1.00000"
+      "extended-srgb:0.10000,0.09000,0.26000,1.00000",
+      "extended-srgb:0.19000,0.21000,0.55000,1.00000"
     ]
   },
   "groups": [
     {
       "layers": [
-        {
-          "image-name": "lens.svg",
-          "name": "lens",
-          "glass": true
-        }
+        { "image-name": "read.svg", "name": "read", "glass": true }
       ],
-      "shadow": {
-        "kind": "neutral",
-        "opacity": 0.5
-      },
-      "translucency": {
-        "enabled": true,
-        "value": 0.15
-      },
+      "shadow": { "kind": "neutral", "opacity": 0.5 },
+      "translucency": { "enabled": true, "value": 0.1 },
       "specular": true
     },
     {
       "layers": [
-        {
-          "image-name": "table.svg",
-          "name": "table",
-          "glass": true
-        }
+        { "image-name": "granules.svg", "name": "granules", "glass": true }
       ],
-      "shadow": {
-        "kind": "neutral",
-        "opacity": 0.5
-      },
-      "translucency": {
-        "enabled": true,
-        "value": 0.2
-      },
+      "shadow": { "kind": "neutral", "opacity": 0.35 },
+      "translucency": { "enabled": true, "value": 0.25 },
       "specular": true,
-      "opacity-specializations": [
-        {
-          "appearance": "tinted",
-          "value": 0.5
-        }
-      ]
+      "opacity-specializations": [ { "appearance": "tinted", "value": 0.6 } ]
     }
   ],
-  "supported-platforms": {
-    "circles": [
-      "watchOS"
-    ],
-    "squares": "shared"
-  }
+  "supported-platforms": { "circles": ["watchOS"], "squares": "shared" }
 }

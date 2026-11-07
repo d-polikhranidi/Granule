@@ -33,9 +33,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             Connections.shared.save(endpoint, password: password ?? "")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { ConnectionsViewController.openInNewWindow(endpoint) }
         }
-        // `-ViewerSettings YES`: Settings at launch (for screenshots).
+        // `-ViewerSettings YES`: Settings at launch (for screenshots), over the window in front.
         if UserDefaults.standard.bool(forKey: "ViewerSettings") {
-            DispatchQueue.main.async { AppDelegate.presentSettings(from: connections) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak window] in
+                guard var top = window?.rootViewController else { return }
+                while let presented = top.presentedViewController { top = presented }
+                AppDelegate.presentSettings(from: top)
+            }
         }
         // `-ViewerForm new`: File > New Connection's form.
         if UserDefaults.standard.string(forKey: "ViewerForm") == "new" {

@@ -3,6 +3,20 @@ import Foundation
 import Testing
 
 @Suite struct CHLocalCheckTests {
+    @Test func queriesThatStopEarlyAreKnown() {
+        for sql in ["SELECT * FROM events LIMIT 10", "select a, b from t where x = 1 limit 100 offset 10",
+                    "SELECT * FROM (SELECT * FROM t ORDER BY x) LIMIT 5", "SELECT lower(s) FROM t LIMIT 1",
+                    "WITH (SELECT max(x) FROM t) AS m SELECT * FROM t WHERE x = m LIMIT 3"] {
+            #expect(CHSQL.stopsEarly(sql), "\(sql)")
+        }
+        for sql in ["SELECT * FROM events", "SELECT * FROM t ORDER BY x LIMIT 10", "SELECT k, count() FROM t GROUP BY k LIMIT 5",
+                    "SELECT DISTINCT k FROM t LIMIT 5", "SELECT * FROM t LIMIT 1 BY k", "SELECT count() FROM t LIMIT 1",
+                    "SELECT uniqExact(u) FROM t LIMIT 1", "SELECT sumIf(x, y) FROM t LIMIT 1", "SELECT 1 LIMIT 1 UNION ALL SELECT * FROM t",
+                    "SELECT row_number() OVER (ORDER BY x) FROM t LIMIT 10", "SELECT * FROM t WHERE x IN (SELECT x FROM u LIMIT 10)"] {
+            #expect(!CHSQL.stopsEarly(sql), "\(sql)")
+        }
+    }
+
     @Test func createdTablesAreNamed() {
         #expect(CHSQL.createdName(of: "CREATE TEMPORARY TABLE t (x UInt32) ENGINE = Memory") == "t")
         #expect(CHSQL.createdName(of: "-- a copy\ncreate table if not exists db.`my t` AS other") == "my t")

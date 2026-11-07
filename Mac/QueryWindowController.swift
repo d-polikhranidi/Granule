@@ -539,8 +539,42 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         confirmProduction(sql) { [weak self] in
             guard let self else { return }
             let parameters = CHSQL.parameters(of: sql)
-            guard !parameters.isEmpty else { return start(sql, values: [:]) }
-            askForValues(of: parameters) { [weak self] values in self?.start(sql, values: values) }
+            let go: ([String: String]) -> Void = { [weak self] values in
+                self?.confirmLargeRead(sql, values: values) { self?.start(sql, values: values) }
+            }
+            if parameters.isEmpty { go([:]) } else { askForValues(of: parameters, then: go) }
+        }
+    }
+
+    private var isEstimating = false
+
+    /// Before a query the server estimates to read more rows than Settings › Queries allows:
+    /// asked first, with a way not to be asked again.
+    private func confirmLargeRead(_ sql: String, values: [String: String], then run: @escaping () -> Void) {
+        guard LargeReads.asks, !isEstimating else { return run() }
+        isEstimating = true
+        statusLabel.textColor = .secondaryLabelColor
+        statusLabel.stringValue = String(localized: "Estimating the rows it reads…")
+        Task { [weak self] in
+            guard let self else { return }
+            let question = await queries.largeReadQuestion(for: sql, parameters: values)
+            isEstimating = false
+            guard let question else { return run() }
+            // Without a window to ask in, nothing runs.
+            guard let window else { return }
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = question.title
+            alert.informativeText = question.detail
+            alert.addButton(withTitle: String(localized: "Run"))
+            alert.addButton(withTitle: String(localized: "Cancel"))
+            alert.showsSuppressionButton = true
+            // (Settings › Queries turns it on again.)
+            alert.suppressionButton?.title = String(localized: "Don't ask again")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                if alert.suppressionButton?.state == .on { UserDefaults.standard.set(false, forKey: LargeReads.asksKey) }
+                if response == .alertFirstButtonReturn { run() } else { self?.updateStatus() }
+            }
         }
     }
 

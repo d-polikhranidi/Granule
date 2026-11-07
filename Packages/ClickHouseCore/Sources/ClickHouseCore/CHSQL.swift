@@ -155,6 +155,38 @@ public enum CHSQL {
         return first == "SYSTEM" && words.count >= 3 && words[1] == "DROP" && words.contains("REPLICA")
     }
 
+    /// Whether a query stops reading once it has its rows, as `EXPLAIN ESTIMATE` doesn't
+    /// tell: a LIMIT of its own (not of a subquery) without ORDER BY, GROUP BY, DISTINCT,
+    /// LIMIT … BY, a window, a UNION or an aggregate function there, which read everything first.
+    public static func stopsEarly(_ query: String) -> Bool {
+        let text = query as NSString
+        let words = tokens(query).filter { $0.kind != .whitespace && $0.kind != .comment }
+        var depth = 0
+        var limited = false
+        for (index, token) in words.enumerated() {
+            let word = text.substring(with: token.range)
+            if token.kind == .punctuation {
+                if word == "(" { depth += 1 } else if word == ")" { depth = max(0, depth - 1) }
+                continue
+            }
+            guard depth == 0, token.kind == .keyword || token.kind == .identifier else { continue }
+            let upper = word.uppercased()
+            if ["ORDER", "GROUP", "DISTINCT", "OVER", "UNION", "INTERSECT", "EXCEPT"].contains(upper) { return false }
+            if upper == "BY", limited { return false }
+            if upper == "LIMIT" { limited = true }
+            // An aggregate over the rows: count(), sumIf(), uniqExact(), …
+            if index + 1 < words.count, text.substring(with: words[index + 1].range) == "(" {
+                let name = word.lowercased()
+                if ["min", "max", "any", "avg", "median", "argmin", "argmax", "corr", "varpop", "stddevpop"].contains(name)
+                    || ["count", "sum", "uniq", "quantile", "group", "topk", "avg", "anylast", "anyheavy", "argmin", "argmax", "min", "max"]
+                        .contains(where: { name.hasPrefix($0) && name != "minus" && !name.hasPrefix("maxim") && !name.hasPrefix("minim") }) {
+                    return false
+                }
+            }
+        }
+        return limited
+    }
+
     /// The table, view or dictionary a CREATE statement makes (its name, without its database
     /// or quotes), `nil` for other statements: a script's later statements use what it makes.
     public static func createdName(of statement: String) -> String? {
@@ -177,7 +209,7 @@ public enum CHSQL {
     }
 
     /// A statement's first word, upper-cased (comments and brackets before it skipped).
-    private static func firstWord(of statement: String) -> String? {
+    public static func firstWord(of statement: String) -> String? {
         leadingWords(of: statement, count: 1).first
     }
 

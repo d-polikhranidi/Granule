@@ -300,8 +300,10 @@ public final class CHClient: Sendable {
 
     /// A statement's result as the server writes it (its own `FORMAT`), as text.
     public func plainText(_ sql: String, settings: [String: String] = [:], database: String? = nil,
-                          queryID: String? = nil, sessionID: String? = nil, background: Bool = false) async throws -> String {
-        let request = try request(sql, settings: settings, database: database, queryID: queryID, sessionID: sessionID, background: background)
+                          queryID: String? = nil, sessionID: String? = nil, parameters: [String: String] = [:],
+                          background: Bool = false) async throws -> String {
+        let request = try request(sql, settings: settings, database: database, queryID: queryID, sessionID: sessionID,
+                                  parameters: parameters, background: background)
         let (data, response) = try await session.data(for: request)
         try Self.check(response, data)
         let text = String(decoding: data, as: UTF8.self)

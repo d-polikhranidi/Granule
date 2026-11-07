@@ -29,6 +29,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         ]), atStartOfMenu: .file)
         builder.insertSibling(UIMenu(title: String(localized: "Query"), children: [
             UIKeyCommand(title: String(localized: "Run Statement"), action: #selector(QueryViewController.runCommand(_:)), input: "\r", modifierFlags: .command),
+            UIKeyCommand(title: String(localized: "Run All Statements"), action: #selector(QueryViewController.runAllCommand(_:)), input: "\r",
+                         modifierFlags: [.command, .shift]),
             UIKeyCommand(title: String(localized: "Stop"), action: #selector(QueryViewController.stopCommand(_:)), input: ".", modifierFlags: .command),
             UIKeyCommand(title: String(localized: "Check Statement"), action: #selector(QueryViewController.checkCommand(_:)), input: "b", modifierFlags: .command),
             UIKeyCommand(title: String(localized: "Format Statement"), action: #selector(QueryViewController.formatCommand(_:)), input: "f",

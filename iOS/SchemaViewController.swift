@@ -55,7 +55,8 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
         search.searchBar.autocapitalizationType = .none
         navigationItem.searchController = search
 
-        let registration = UICollectionView.CellRegistration<UICollectionViewListCell, Node> { cell, _, node in
+        // (Weakly: the data source, the controller's, keeps the registration.)
+        let registration = UICollectionView.CellRegistration<UICollectionViewListCell, Node> { [weak self] cell, _, node in
             var content = cell.defaultContentConfiguration()
             switch node.kind {
             case .server:

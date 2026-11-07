@@ -245,7 +245,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     private func connect() {
         statusLabel.text = endpoint.isCloud ? String(localized: "Connecting (a sleeping service takes a while to wake)…") : String(localized: "Connecting…")
-        Task {
+        Task { [weak self] in
+            guard let self else { return }
             do {
                 // Connected already when the list checked it.
                 let info: CHServerInfo
@@ -1007,8 +1008,9 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         Task {
             do {
                 let bytes = try await client.download(sql, format: format, to: file, parameters: parameterValues) { written in
-                    Task { @MainActor [weak self] in
-                        self?.statusLabel.text = String(localized: "Exporting… \(ByteCountFormatter.string(fromByteCount: Int64(written), countStyle: .file))")
+                    // (The export holds the view until it's done: so does this.)
+                    Task { @MainActor in
+                        self.statusLabel.text = String(localized: "Exporting… \(ByteCountFormatter.string(fromByteCount: Int64(written), countStyle: .file))")
                     }
                 }
                 statusLabel.text = String(localized: "Exported \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)).")

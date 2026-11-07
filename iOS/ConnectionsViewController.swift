@@ -56,7 +56,8 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
             guard let self else { return }
             AppDelegate.presentSettings(from: self)
         })
-        let registration = UICollectionView.CellRegistration<UICollectionViewListCell, UUID> { cell, _, id in
+        // (Weakly: the data source, the controller's, keeps the registration.)
+        let registration = UICollectionView.CellRegistration<UICollectionViewListCell, UUID> { [weak self] cell, _, id in
             guard let endpoint = Connections.shared.endpoints.first(where: { $0.id == id }) else { return }
             var content = cell.defaultContentConfiguration()
             content.text = endpoint.title
@@ -214,7 +215,7 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
         let waiting = UIAlertController(title: String(localized: "Connecting to \(endpoint.title)…"),
                                         message: endpoint.isCloud ? String(localized: "A sleeping service takes a while to wake.") : nil,
                                         preferredStyle: .alert)
-        let attempt = Task {
+        let attempt = Task { [weak self] in
             do {
                 try await Connections.shared.route(client, for: endpoint)
                 _ = try await client.connect(timeout: endpoint.isCloud ? 120 : 20)

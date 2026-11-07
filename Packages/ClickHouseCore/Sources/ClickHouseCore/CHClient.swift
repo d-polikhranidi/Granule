@@ -14,6 +14,9 @@ public struct CHQueryOptions: Sendable {
     public var maxBytes: Int?
     /// More settings for the query.
     public var settings: [String: String] = [:]
+    /// The viewer's own query, not the user's: marked in `system.query_log`
+    /// (`CHClient.backgroundComment`) so views of the log can leave it out.
+    public var isBackground = false
 
     public init() {}
 }
@@ -155,12 +158,21 @@ public final class CHClient: Sendable {
 
     // MARK: Requests
 
+    /// The `log_comment` of the viewer's own queries (progress, checks, completion,
+    /// schema, server views): `system.query_log` and `system.processes` keep it, so
+    /// the server views leave them out and a DBA can tell them from the user's.
+    public static let backgroundComment = "Clickhouse Viewer: background"
+
     /// The request of a statement: the SQL in the body, settings in the URL.
     func request(_ sql: String, settings: [String: String], database: String?, queryID: String? = nil,
-                 sessionID: String? = nil, parameters: [String: String] = [:], timeout: TimeInterval = 3600) throws -> URLRequest {
+                 sessionID: String? = nil, parameters: [String: String] = [:], timeout: TimeInterval = 3600,
+                 background: Bool = false) throws -> URLRequest {
         guard let base = baseURL, var components = URLComponents(url: base, resolvingAgainstBaseURL: false) else {
             throw CHClientError.badURL
         }
+        var settings = settings
+        // A user with readonly = 1 may set nothing (and before connect() it isn't known yet).
+        if background, maySetSettings, state.value != nil { settings["log_comment"] = Self.backgroundComment }
         var items: [URLQueryItem] = []
         let database = database ?? (endpoint.database.isEmpty ? nil : endpoint.database)
         if let database { items.append(URLQueryItem(name: "database", value: database)) }
@@ -240,7 +252,7 @@ public final class CHClient: Sendable {
             do {
                 let settings = resultSettings(for: sql, options: options)
                 request = try self.request(sql, settings: settings, database: nil, queryID: options.queryID,
-                                           sessionID: options.sessionID, parameters: options.parameters)
+                                           sessionID: options.sessionID, parameters: options.parameters, background: options.isBackground)
             } catch {
                 continuation.finish(throwing: error)
                 return
@@ -268,10 +280,12 @@ public final class CHClient: Sendable {
         }
     }
 
-    /// A whole result, for the viewer's own small queries (schema, server state).
-    public func result(_ sql: String, settings: [String: String] = [:]) async throws -> CHResult {
+    /// A whole result, for the viewer's own small queries (schema, server state):
+    /// marked as the viewer's own unless `background` is false.
+    public func result(_ sql: String, settings: [String: String] = [:], background: Bool = true) async throws -> CHResult {
         var options = CHQueryOptions()
         options.settings = settings
+        options.isBackground = background
         var result = CHResult()
         for try await event in execute(sql, options: options) {
             if case .result(let current) = event { result = current }
@@ -281,8 +295,8 @@ public final class CHClient: Sendable {
 
     /// A statement's result as the server writes it (its own `FORMAT`), as text.
     public func plainText(_ sql: String, settings: [String: String] = [:], database: String? = nil,
-                          queryID: String? = nil, sessionID: String? = nil) async throws -> String {
-        let request = try request(sql, settings: settings, database: database, queryID: queryID, sessionID: sessionID)
+                          queryID: String? = nil, sessionID: String? = nil, background: Bool = false) async throws -> String {
+        let request = try request(sql, settings: settings, database: database, queryID: queryID, sessionID: sessionID, background: background)
         let (data, response) = try await session.data(for: request)
         try Self.check(response, data)
         let text = String(decoding: data, as: UTF8.self)
@@ -320,7 +334,7 @@ public final class CHClient: Sendable {
 
     /// Asks the server to stop a query (`KILL QUERY … ASYNC`).
     public func kill(queryID: String) async throws {
-        _ = try await plainText("KILL QUERY WHERE query_id = \(CHSQL.quotedString(queryID)) ASYNC FORMAT Null")
+        _ = try await plainText("KILL QUERY WHERE query_id = \(CHSQL.quotedString(queryID)) ASYNC FORMAT Null", background: true)
     }
 
     /// A response with an error status: the server's error, or what came instead.

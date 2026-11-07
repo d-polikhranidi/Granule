@@ -66,6 +66,21 @@ struct CHServerTests {
         "'{\"a\": 1, \"b\": {\"c\": \"x\"}}'::JSON",
     ]
 
+    /// The viewer's own queries carry its mark in the log; the user's don't.
+    @Test func theViewersOwnQueriesAreMarked() async throws {
+        let client = try await TestServer.connected()
+        let mark = "viewer-mark-\(UUID().uuidString.prefix(8))"
+        _ = try await client.result("SELECT '\(mark)' AS own")
+        _ = try await client.plainText("SELECT '\(mark)' AS users FORMAT Null")
+        _ = try await client.plainText("SYSTEM FLUSH LOGS")
+        let text = try await client.plainText("""
+            SELECT log_comment FROM system.query_log
+            WHERE event_date >= yesterday() AND type = 'QueryFinish' AND query LIKE '%\(mark)%' AND query NOT LIKE '%query_log%'
+            ORDER BY query FORMAT TSV
+            """)
+        #expect(text.split(separator: "\n", omittingEmptySubsequences: false).dropLast().map(String.init) == [CHClient.backgroundComment, ""])
+    }
+
     @Test func valuesAreWrittenAsTheServerWritesThem() async throws {
         let client = try await TestServer.connected()
         // Only the settings this server has (older ones lack the newer types').

@@ -64,6 +64,9 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
         }
     }
 
+    /// The viewer's own queries' mark (progress, checks, these views), left out of them.
+    private static let ownComment = CHSQL.quotedString(CHClient.backgroundComment)
+
     var sql: String {
         switch self {
         case .processes:
@@ -71,7 +74,7 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
             SELECT query_id, user, elapsed, read_rows, read_bytes, total_rows_approx, memory_usage, peak_memory_usage,
                    written_rows, is_cancelled, query_kind, query
             FROM system.processes
-            WHERE query NOT LIKE '%system.processes%'
+            WHERE query NOT LIKE '%system.processes%' AND Settings['log_comment'] != \(Self.ownComment)
             ORDER BY elapsed DESC
             """
         case .recentQueries:
@@ -80,6 +83,7 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
                    exception_code, query_kind, query_id, query
             FROM system.query_log
             WHERE event_date >= yesterday() AND event_time > now() - INTERVAL 1 HOUR AND type != 'QueryStart'
+              AND log_comment != \(Self.ownComment)
             ORDER BY event_time DESC
             LIMIT 100000
             """
@@ -90,6 +94,7 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
                    max(memory_usage) AS max_memory, normalized_query_hash, any(query) AS example
             FROM system.query_log
             WHERE event_date >= yesterday() AND event_time > now() - INTERVAL 1 DAY AND type = 'QueryFinish'
+              AND log_comment != \(Self.ownComment)
             GROUP BY normalized_query_hash
             ORDER BY total_ms DESC
             LIMIT 1000
@@ -99,7 +104,7 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
             SELECT event_time, exception_code, exception, query_duration_ms, user, query_id, query
             FROM system.query_log
             WHERE event_date >= yesterday() AND event_time > now() - INTERVAL 1 DAY
-              AND type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing')
+              AND type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND log_comment != \(Self.ownComment)
             ORDER BY event_time DESC
             LIMIT 10000
             """

@@ -120,13 +120,21 @@ final class QueryController {
         }
     }
 
-    /// The live view run again in two seconds (unless something else runs by then).
+    /// A live view waits while its window can't be seen (Mac: not on screen;
+    /// iPad and iPhone: in the background), and goes on when it can.
+    var isPaused = false {
+        didSet { if oldValue, !isPaused { scheduleRefresh() } }
+    }
+
+    /// The live view run again in two seconds, ten on ClickHouse Cloud (every query
+    /// keeps a service awake), unless something else runs by then or it's paused.
     private func scheduleRefresh() {
         refreshing?.cancel()
         guard let view, view.isLive else { return }
+        let interval: Duration = client.endpoint.isCloud ? .seconds(10) : .seconds(2)
         refreshing = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            guard let self, !Task.isCancelled, self.view == view, !self.isRunning else { return }
+            try? await Task.sleep(for: interval)
+            guard let self, !Task.isCancelled, self.view == view, !self.isRunning, !self.isPaused else { return }
             self.start(view.sql(cluster: self.cluster), parameters: [:], refresh: true)
         }
     }
@@ -156,6 +164,8 @@ final class QueryController {
         if view == nil { monitor(options.queryID) }
         options.sessionID = sessionID
         options.parameters = parameters
+        // A server view is the viewer's own query: left out of the views of the log.
+        options.isBackground = view != nil
         let budget = Self.budget
         options.maxRows = budget.rows
         options.maxBytes = budget.bytes

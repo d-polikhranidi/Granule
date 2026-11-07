@@ -147,6 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .separator(),
             item(String(localized: "Close"), #selector(NSWindow.performClose(_:)), "w"),
             item(String(localized: "Export…"), #selector(QueryWindowController.exportResult(_:)), "e"),
+            item(String(localized: "Export Shown Rows…"), #selector(QueryWindowController.exportShownRows(_:)), "e", [.command, .option]),
         ])
         submenu(String(localized: "Edit"), [
             item(String(localized: "Undo"), Selector(("undo:")), "z"),

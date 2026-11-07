@@ -5,7 +5,8 @@ import UIKit
 /// opened, its columns. Tap a table to see its rows; long press for more.
 final class SchemaViewController: UICollectionViewController, UISearchResultsUpdating {
     private let client: CHClient
-    var onShowRows: (Schema.Table) -> Void = { _ in }
+    /// A table's rows: the first ones, or all (`true`).
+    var onShowRows: (Schema.Table, Bool) -> Void = { _, _ in }
     var onShowCreate: (Schema.Table) -> Void = { _ in }
     var onInsert: (String) -> Void = { _ in }
     var onShowView: (ServerView) -> Void = { _ in }
@@ -183,7 +184,7 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
         collectionView.deselectItem(at: indexPath, animated: true)
         switch node.kind {
         case .view(let view): onShowView(view)
-        case .table(let table): onShowRows(table)
+        case .table(let table): onShowRows(table, false)
         case .column(let column): onInsert(CHSQL.quotedName(column.name))
         default: break
         }
@@ -197,7 +198,8 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
             switch node.kind {
             case .table(let table):
                 return UIMenu(children: [
-                    UIAction(title: String(localized: "Show Rows"), image: UIImage(systemName: "tablecells")) { _ in self.onShowRows(table) },
+                    UIAction(title: String(localized: "Show Rows"), image: UIImage(systemName: "tablecells")) { _ in self.onShowRows(table, false) },
+                    UIAction(title: String(localized: "Show All Rows"), image: UIImage(systemName: "tablecells.fill")) { _ in self.onShowRows(table, true) },
                     UIAction(title: String(localized: "Show Details"), image: UIImage(systemName: "info.circle")) { _ in self.onShowDetails(table) },
                     UIAction(title: String(localized: "Show CREATE Statement"), image: UIImage(systemName: "doc.plaintext")) { _ in self.onShowCreate(table) },
                     UIAction(title: String(localized: "Insert Name"), image: UIImage(systemName: "text.insert")) { _ in self.onInsert(table.qualifiedName) },

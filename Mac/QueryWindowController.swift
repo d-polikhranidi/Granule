@@ -150,7 +150,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         window.toolbarStyle = .unified
 
         sidebar.client = client
-        sidebar.onShowRows = { [weak self] table in self?.showRows(of: table) }
+        sidebar.onShowRows = { [weak self] table, all in self?.showRows(of: table, all: all) }
         sidebar.onShowCreate = { [weak self] table in self?.showCreate(of: table) }
         sidebar.onInsert = { [weak self] text in self?.insert(text) }
         sidebar.onShowDetails = { [weak self] table in self?.showDetails(of: table, .overview) }
@@ -459,6 +459,14 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 if let sql = UserDefaults.standard.string(forKey: "ViewerPlan") {
                     editor.string = sql
                     showPlan(of: sql)
+                }
+                // `-ViewerShowRows <db.table>[,all]`: Show Rows (or Show All Rows) of that table.
+                if let shown = UserDefaults.standard.string(forKey: "ViewerShowRows") {
+                    let parts = shown.split(separator: ","), name = parts[0].split(separator: ".", maxSplits: 1)
+                    if name.count == 2 {
+                        showRows(of: Schema.Table(database: String(name[0]), name: String(name[1]), engine: "", rows: nil, bytes: nil, comment: ""),
+                                 all: parts.count > 1 && parts[1] == "all")
+                    }
                 }
                 // `-ViewerCluster <name>`: the views read across that cluster.
                 if let cluster = UserDefaults.standard.string(forKey: "ViewerCluster") { queries.cluster = cluster }
@@ -808,11 +816,17 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         }
     }
 
-    private func showRows(of table: Schema.Table) {
-        let sql = Schema.previewStatement(of: table)
-        replaceEditorText(sql)
-        run(sql)
+    private func showRows(of table: Schema.Table, all: Bool) {
+        Task {
+            let sql = await Schema.previewStatement(of: table, client: client, all: all)
+            preview = all ? nil : sql
+            replaceEditorText(sql)
+            run(sql)
+        }
     }
+
+    /// The Show Rows statement that read the first rows only: said under the editor when they fill it.
+    private var preview: String?
 
     /// A table's details over the result: the detail chosen, run as a result of its own.
     private func showDetails(of table: Schema.Table, _ detail: TableDetail) {
@@ -953,6 +967,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             if queries.isViewersOwn, case .finished(let stats) = queries.state, stats.rows == 0 {
                 messageLabel.textColor = .secondaryLabelColor
                 messageLabel.stringValue = String(localized: "The server hasn't written this run to its log yet: it does every few seconds. Try again in a moment.")
+                messageLabel.isHidden = false
+            }
+            if case .finished(let stats) = queries.state, let preview, queries.statement == preview, stats.rows >= Schema.previewRows {
+                messageLabel.textColor = .secondaryLabelColor
+                messageLabel.stringValue = String(localized: "The first \(Schema.previewRows.formatted()) rows. Show All Rows in the table's menu reads them all.")
                 messageLabel.isHidden = false
             }
             if case .finished(let stats) = queries.state, let sql = queries.statement, queries.isUsersStatement, !historySaved.contains(stats.queryID) {
@@ -1191,6 +1210,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     }
 
     func tableViewDidChangeActivity(_ tableView: GHTableView) {
+        if tableView === table { queries.tableActivityChanged() }
         updateStatus()
         #if DEBUG
         debugActivityChanged()
@@ -1302,7 +1322,13 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         panel.nameFieldStringValue = "result.csv"
         let popUp = NSPopUpButton()
         popUp.addItems(withTitles: formats.map(\.title))
-        let accessory = NSStackView(views: [NSTextField(labelWithString: String(localized: "Format:")), popUp])
+        let format = NSStackView(views: [NSTextField(labelWithString: String(localized: "Format:")), popUp])
+        let note = NSTextField(wrappingLabelWithString: String(localized: "The server runs the statement again and writes all its rows: they may differ from those shown. File › Export Shown Rows… writes those."))
+        note.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        note.textColor = .secondaryLabelColor
+        note.preferredMaxLayoutWidth = 420
+        let accessory = NSStackView(views: [format, note])
+        accessory.orientation = .vertical
         accessory.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         panel.accessoryView = accessory
         let chooser = FormatChooser(panel: panel, formats: formats.map(\.ext))
@@ -1326,6 +1352,13 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 }
             }
         }
+    }
+
+    /// File > Export Shown Rows… (⌥⌘E): the rows as the table shows them (its sort, its search),
+    /// as an Excel workbook or CSV, written by the table itself; nothing runs again.
+    @objc func exportShownRows(_ sender: Any?) {
+        table.exportFileName = "result"
+        table.exportDocument(sender)
     }
 
     /// Calls back as a field's text changes (the production question's Run button).
@@ -1437,6 +1470,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         switch item.action {
         case #selector(stopQuery(_:)): queries.isRunning
         case #selector(exportResult(_:)): queries.canExport
+        case #selector(exportShownRows(_:)): queries.source != nil && table.numberOfRows > 0 && !table.isExporting
         case #selector(showValue(_:)): queries.source != nil
         case #selector(checkStatement(_:)), #selector(formatStatement(_:)): client.serverInfo != nil
         case #selector(showQueryDetails(_:)): lastRun?.queryID != nil && !queries.isRunning

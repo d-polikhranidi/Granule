@@ -81,6 +81,15 @@ struct CHServerTests {
         }
     }
 
+    /// Every result column the viewer can't read, named by the server at once (the query not run).
+    @Test func unreadableColumnsAreNamedAtOnce() async throws {
+        let client = try await TestServer.connected()
+        let columns = try await client.unreadableColumns(of: "SELECT uniqState(number) AS u, sum(number) AS s, quantilesState(0.5)(number) AS `q x` FROM numbers(10)")
+        #expect(columns.map(\.name) == ["u", "q x"])
+        #expect(columns.first?.type == "AggregateFunction(uniq, UInt64)")
+        #expect(try await client.unreadableColumns(of: "SELECT {n:UInt8} AS n", parameters: ["n": "1"]).isEmpty)
+    }
+
     /// The rows a query reads, as the server estimates them: a MergeTree table's, fewer for a
     /// condition on its key, none for a table it can't tell (Memory).
     @Test func readsAreEstimated() async throws {

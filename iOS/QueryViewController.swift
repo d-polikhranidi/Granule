@@ -511,7 +511,36 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     }
 
     private func askAndStart(_ sql: String) {
-        askForValues(of: CHSQL.parameters(of: sql)) { [weak self] values in self?.start(sql, values: values) }
+        askForValues(of: CHSQL.parameters(of: sql)) { [weak self] values in
+            self?.confirmLargeRead(sql, values: values) { self?.start(sql, values: values) }
+        }
+    }
+
+    private var isEstimating = false
+
+    /// Before a query the server estimates to read more rows than Settings allows: asked first.
+    private func confirmLargeRead(_ sql: String, values: [String: String], then run: @escaping () -> Void) {
+        guard LargeReads.asks, !isEstimating else { return run() }
+        isEstimating = true
+        statusLabel.textColor = .secondaryLabel
+        statusLabel.text = String(localized: "Estimating the rows it reads…")
+        Task { [weak self] in
+            guard let self else { return }
+            let question = await queries.largeReadQuestion(for: sql, parameters: values)
+            isEstimating = false
+            guard let question else { return run() }
+            let alert = UIAlertController(title: question.title, message: question.detail, preferredStyle: .alert)
+            let runAction = UIAlertAction(title: String(localized: "Run"), style: .default) { _ in run() }
+            alert.addAction(runAction)
+            // (Settings turns it on again.)
+            alert.addAction(UIAlertAction(title: String(localized: "Run and Don't Ask Again"), style: .default) { _ in
+                UserDefaults.standard.set(false, forKey: LargeReads.asksKey)
+                run()
+            })
+            alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel) { [weak self] _ in self?.updateStatus() })
+            alert.preferredAction = runAction
+            presentOnTop(alert)
+        }
     }
 
     /// The parameters' values asked (those given last offered), then handed on.

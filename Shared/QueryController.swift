@@ -132,6 +132,29 @@ final class QueryController {
         }
     }
 
+    // MARK: Large reads
+
+    /// The question before a query the server estimates to read more rows than Settings › Queries
+    /// allows (`nil`: run it). A query that stops at its LIMIT, a statement with its own FORMAT,
+    /// tables the server can't tell (not MergeTree) and an estimate that fails or takes over
+    /// two seconds say nothing.
+    func largeReadQuestion(for sql: String, parameters: [String: String]) async -> (title: String, detail: String)? {
+        guard LargeReads.asks, ["SELECT", "WITH", "FROM"].contains(CHSQL.firstWord(of: sql) ?? ""),
+              CHSQL.formatClause(of: sql) == nil, !CHSQL.stopsEarly(sql) else { return nil }
+        let database = currentDatabase ?? (client.endpoint.database.isEmpty ? nil : client.endpoint.database)
+        guard let estimate = try? await client.estimate(sql, parameters: parameters, database: database),
+              estimate.rows >= LargeReads.rows else { return nil }
+        let compact = IntegerFormatStyle<Int>.number.notation(.compactName)
+        let tables = estimate.tables.sorted { $0.rows > $1.rows }
+        var lines = tables.prefix(3).map { table in
+            String(localized: "\(table.database).\(table.name): \(table.rows.formatted(compact)) rows in \(table.parts) parts")
+        }
+        if tables.count > 3 { lines.append(String(localized: "and \(tables.count - 3) more tables")) }
+        return (String(localized: "This query reads about \(estimate.rows.formatted(compact)) rows"),
+                lines.joined(separator: "\n") + "\n\n"
+                    + String(localized: "That's the server's estimate from its indexes. Reading this much can take a while and load the server."))
+    }
+
     // MARK: Scripts
 
     /// The script run last: its statement running (or the one it stopped at), of how many.
@@ -808,5 +831,19 @@ extension String {
     var firstParagraph: String {
         let text = trimmingCharacters(in: .whitespacesAndNewlines)
         return text.components(separatedBy: "\n\n").first ?? text
+    }
+}
+
+/// Settings › Queries: whether a query the server estimates to read many rows is asked about
+/// before it runs, and from how many.
+enum LargeReads {
+    static let asksKey = "AsksBeforeLargeReads"
+    static let rowsKey = "LargeReadRows"
+    static let defaultRows = 1_000_000_000.0
+
+    // (Read as `bool`/`double` do: a launch argument's value is text.)
+    static var asks: Bool { UserDefaults.standard.object(forKey: asksKey) == nil || UserDefaults.standard.bool(forKey: asksKey) }
+    static var rows: Int {
+        Int(UserDefaults.standard.object(forKey: rowsKey) == nil ? defaultRows : UserDefaults.standard.double(forKey: rowsKey))
     }
 }

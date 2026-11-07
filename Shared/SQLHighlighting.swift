@@ -169,7 +169,45 @@ enum SQLHighlighting {
 }
 
 /// Settings > Appearance: the Mac's Settings window pane, a sheet on the iPad and iPhone.
+/// Settings › Queries: what's asked before a query runs.
+struct QuerySettingsSection: View {
+    @AppStorage(LargeReads.asksKey) private var asks = true
+    @AppStorage(LargeReads.rowsKey) private var rows = LargeReads.defaultRows
+
+    var body: some View {
+        Section {
+            Toggle(isOn: $asks) {
+                Text("Ask before a query reads many rows")
+                Text("By the server's estimate from its indexes (MergeTree tables), before the query runs. A query that stops at its LIMIT isn't asked about.")
+            }
+            Picker("More than", selection: $rows) {
+                Text("100 million rows").tag(1e8)
+                Text("1 billion rows").tag(1e9)
+                Text("10 billion rows").tag(1e10)
+                Text("100 billion rows").tag(1e11)
+            }
+            .disabled(!asks)
+        } header: {
+            Text("Before Running")
+        }
+    }
+}
+
+#if os(macOS)
+/// The Mac's Queries pane.
+struct QuerySettingsView: View {
+    var body: some View {
+        Form { QuerySettingsSection() }
+            .formStyle(.grouped)
+            .frame(width: 560)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+#endif
+
 struct AppearanceSettingsView: View {
+    /// The Queries section above (iOS: one sheet for all of Settings).
+    var includesQueries = false
     @AppStorage("EditorTheme") private var theme = EditorTheme.standard.rawValue
     @AppStorage("EditorFontSize") private var editorFontSize = Double(AppearanceSettings.defaultEditorFontSize)
     @AppStorage("ResultFontSize") private var resultFontSize = 0.0
@@ -182,6 +220,7 @@ struct AppearanceSettingsView: View {
 
     var body: some View {
         Form {
+            if includesQueries { QuerySettingsSection() }
             Section {
                 Toggle(isOn: $darkContent) {
                     Text("Dark background for the editor and results")

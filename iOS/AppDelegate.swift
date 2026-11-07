@@ -61,9 +61,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         Self.presentSettings(from: top)
     }
 
-    /// Settings > Appearance in a sheet: the editor's theme and size, the result's look.
+    /// Settings in a sheet: what's asked before a query runs, the editor's theme and size, the result's look.
     static func presentSettings(from controller: UIViewController) {
-        let settings = UIHostingController(rootView: AppearanceSettingsView())
+        let settings = UIHostingController(rootView: AppearanceSettingsView(includesQueries: true))
         settings.title = String(localized: "Settings")
         settings.navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak settings] _ in
             settings?.dismiss(animated: true)

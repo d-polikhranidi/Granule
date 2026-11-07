@@ -222,38 +222,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 // MARK: - Settings
 
-/// The Settings window: its panes in a preference toolbar (Appearance, for now),
-/// its title the pane's, as the HIG asks.
+/// The Settings window: its panes in a preference toolbar (Queries, Appearance), its
+/// title the pane's, as the HIG asks; the pane chosen last opens again.
 final class SettingsWindowController: NSWindowController, NSToolbarDelegate {
-    private static let appearanceItem = NSToolbarItem.Identifier("appearance")
+    private struct Pane {
+        let id: NSToolbarItem.Identifier
+        let title: String
+        let symbol: String
+        let content: () -> NSViewController
+    }
+
+    private let panes = [
+        Pane(id: .init("queries"), title: String(localized: "Queries"), symbol: "gauge.with.dots.needle.67percent") {
+            let hosting = NSHostingController(rootView: QuerySettingsView())
+            hosting.sizingOptions = [.preferredContentSize]
+            return hosting
+        },
+        Pane(id: .init("appearance"), title: String(localized: "Appearance"), symbol: "paintpalette") {
+            let hosting = NSHostingController(rootView: AppearanceSettingsView())
+            hosting.sizingOptions = [.preferredContentSize]
+            return hosting
+        },
+    ]
 
     init() {
-        let hosting = NSHostingController(rootView: AppearanceSettingsView())
-        hosting.sizingOptions = [.preferredContentSize]
-        let window = NSWindow(contentViewController: hosting)
-        window.styleMask = [.titled, .closable]
-        window.title = String(localized: "Appearance")
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 400), styleMask: [.titled, .closable],
+                              backing: .buffered, defer: true)
         super.init(window: window)
         let toolbar = NSToolbar(identifier: "Settings")
         toolbar.delegate = self
-        toolbar.selectedItemIdentifier = Self.appearanceItem
         window.toolbar = toolbar
         window.toolbarStyle = .preference
+        // Where it was (its top left: the panes' heights differ).
+        let placed = window.setFrameUsingName("Settings")
+        let topLeft = NSPoint(x: window.frame.minX, y: window.frame.maxY)
+        let saved = UserDefaults.standard.string(forKey: "SettingsPane")
+        show(panes.first { $0.id.rawValue == saved } ?? panes[1])
+        if placed { window.setFrameTopLeftPoint(topLeft) } else { window.center() }
         window.setFrameAutosaveName("Settings")
-        if !window.setFrameUsingName("Settings") { window.center() }
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.appearanceItem] }
-    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.appearanceItem] }
-    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [Self.appearanceItem] }
+    /// A pane in the window, its top edge kept where it is.
+    private func show(_ pane: Pane) {
+        guard let window else { return }
+        let top = window.frame.maxY
+        window.contentViewController = pane.content()
+        window.setFrameTopLeftPoint(NSPoint(x: window.frame.minX, y: top))
+        window.title = pane.title
+        window.toolbar?.selectedItemIdentifier = pane.id
+        UserDefaults.standard.set(pane.id.rawValue, forKey: "SettingsPane")
+    }
+
+    @objc private func choosePane(_ item: NSToolbarItem) {
+        guard let pane = panes.first(where: { $0.id == item.itemIdentifier }), window?.title != pane.title else { return }
+        show(pane)
+    }
+
+    func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { panes.map(\.id) }
+    func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { panes.map(\.id) }
+    func toolbarSelectableItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { panes.map(\.id) }
 
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier identifier: NSToolbarItem.Identifier,
                  willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+        guard let pane = panes.first(where: { $0.id == identifier }) else { return nil }
         let item = NSToolbarItem(itemIdentifier: identifier)
-        item.label = String(localized: "Appearance")
-        item.image = NSImage(systemSymbolName: "paintpalette", accessibilityDescription: item.label)
+        item.label = pane.title
+        item.image = NSImage(systemSymbolName: pane.symbol, accessibilityDescription: pane.title)
+        item.target = self
+        item.action = #selector(choosePane(_:))
         return item
     }
 }

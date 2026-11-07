@@ -81,6 +81,22 @@ struct CHServerTests {
         }
     }
 
+    /// The rows a query reads, as the server estimates them: a MergeTree table's, fewer for a
+    /// condition on its key, none for a table it can't tell (Memory).
+    @Test func readsAreEstimated() async throws {
+        let client = try await TestServer.connected()
+        let table = "viewer_estimate_\(UUID().uuidString.prefix(8).lowercased())"
+        _ = try await client.plainText("CREATE TABLE \(table) (k UInt64, v String) ENGINE = MergeTree ORDER BY k SETTINGS index_granularity = 1024")
+        defer { Task { _ = try? await client.plainText("DROP TABLE IF EXISTS \(table)") } }
+        _ = try await client.plainText("INSERT INTO \(table) SELECT number, toString(number) FROM numbers(100000)")
+        let all = try await client.estimate("SELECT * FROM \(table)")
+        #expect(all.rows == 100_000, "\(all)")
+        #expect(all.tables.first?.name == table)
+        let some = try await client.estimate("SELECT * FROM \(table) WHERE k < {to:UInt64}", parameters: ["to": "2000"])
+        #expect(some.rows > 0 && some.rows < 10_000, "\(some)")
+        #expect(try await client.estimate("SELECT 1").rows == 0)
+    }
+
     /// A read-only connection writes nowhere, through statements with their own FORMAT
     /// too; reading and killing still work. (`null()` isn't a probe: readonly lets
     /// writes into table functions through.)

@@ -583,13 +583,19 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         }
     }
 
-    func showRows(of table: Schema.Table) {
-        let sql = Schema.previewStatement(of: table)
-        editor.text = sql
-        SQLHighlighting.apply(to: editor.textStorage)
-        run(sql)
+    func showRows(of table: Schema.Table, all: Bool) {
         showSecondary()
+        Task {
+            let sql = await Schema.previewStatement(of: table, client: client, all: all)
+            preview = all ? nil : sql
+            editor.text = sql
+            SQLHighlighting.apply(to: editor.textStorage)
+            run(sql)
+        }
     }
+
+    /// The Show Rows statement that read the first rows only: said in the status when they fill it.
+    private var preview: String?
 
     /// A view of the server (Running Queries, Merges, …), refreshed while live.
     func show(_ view: ServerView) {
@@ -726,6 +732,9 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             if queries.isViewersOwn, case .finished(let stats) = queries.state, stats.rows == 0 {
                 statusLabel.text = String(localized: "The server hasn't written this run to its log yet: it does every few seconds. Try again in a moment.")
             }
+            if case .finished(let stats) = queries.state, let preview, queries.statement == preview, stats.rows >= Schema.previewRows {
+                statusLabel.text = String(localized: "The first \(Schema.previewRows.formatted()) rows. Show All Rows in the table's menu reads them all.")
+            }
             if case .finished(let stats) = queries.state, let sql = queries.statement, queries.isUsersStatement, !historySaved.contains(stats.queryID) {
                 historySaved.insert(stats.queryID)
                 lastRun = history.add(sql, rows: stats.rows, seconds: QueryController.seconds(stats.elapsed), queryID: stats.queryID)
@@ -818,6 +827,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     }
 
     func tableViewDidChangeActivity(_ tableView: GHTableView) {
+        if tableView === table { queries.tableActivityChanged() }
         updateStatus()
     }
 
@@ -848,9 +858,18 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                                                    ("Arrow", "Arrow", "arrow"), (String(localized: "JSON lines"), "JSONEachRow", "jsonl")]
         // Export runs the statement again: a write would run twice.
         let canExport = queries.canExport
-        let export = UIMenu(title: String(localized: "Export"), image: UIImage(systemName: "square.and.arrow.up"), children: formats.map { title, format, ext in
+        // The rows shown, as the table shows them (written by it, nothing runs again), or all the
+        // statement's rows written by the server, which runs it again.
+        let shown = UIAction(title: String(localized: "Shown Rows…"), image: UIImage(systemName: "tablecells"),
+                             attributes: queries.source != nil && table.numberOfRows > 0 && !table.isExporting ? [] : .disabled) { [weak self] _ in
+            guard let self else { return }
+            table.exportFileName = "result"
+            table.exportDocument(navigationItem.rightBarButtonItems?.first)
+        }
+        let byServer = UIMenu(title: String(localized: "All Rows, Run Again by the Server"), options: .displayInline, children: formats.map { title, format, ext in
             UIAction(title: title, attributes: canExport ? [] : .disabled) { [weak self] _ in self?.export(format: format, extension: ext) }
         })
+        let export = UIMenu(title: String(localized: "Export"), image: UIImage(systemName: "square.and.arrow.up"), children: [shown, byServer])
         let plan = UIAction(title: String(localized: "Explain Plan")) { [weak self] _ in
             guard let self, let sql = currentStatement() else { return }
             showPlan(of: sql)

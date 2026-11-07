@@ -7,7 +7,8 @@ import ClickHouseCore
 final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineViewDelegate, NSMenuDelegate {
     var client: CHClient?
     /// A table to show the rows of.
-    var onShowRows: (Schema.Table) -> Void = { _ in }
+    /// A table's rows: the first ones, or all (`true`).
+    var onShowRows: (Schema.Table, Bool) -> Void = { _, _ in }
     /// A table's CREATE statement to show.
     var onShowCreate: (Schema.Table) -> Void = { _ in }
     /// A name to put in the editor.
@@ -303,7 +304,7 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
     @objc private func doubleClicked(_ sender: Any?) {
         guard let item = clickedItem else { return }
         switch item.kind {
-        case .table(let table): onShowRows(table)
+        case .table(let table): onShowRows(table, false)
         case .column(let column): onInsert(CHSQL.quotedName(column.name))
         default: break
         }
@@ -325,7 +326,8 @@ final class SchemaSidebar: NSViewController, NSOutlineViewDataSource, NSOutlineV
             add(String(localized: "Insert Name")) { [weak self] in self?.onInsert(CHSQL.quotedName(database.name)) }
             add(String(localized: "Copy Name")) { Self.copy(database.name) }
         case .table(let table):
-            add(String(localized: "Show Rows")) { [weak self] in self?.onShowRows(table) }
+            add(String(localized: "Show Rows")) { [weak self] in self?.onShowRows(table, false) }
+            add(String(localized: "Show All Rows")) { [weak self] in self?.onShowRows(table, true) }
             add(String(localized: "Show Details")) { [weak self] in self?.onShowDetails(table) }
             add(String(localized: "Show CREATE Statement")) { [weak self] in self?.onShowCreate(table) }
             menu.addItem(.separator())

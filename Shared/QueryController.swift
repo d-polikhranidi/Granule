@@ -419,11 +419,17 @@ final class QueryController {
                 }
             }
         } catch CHClientError.unsupportedType(let column, let type) where rewrites < 8 && isRead && !column.isEmpty {
-            // A column whose bytes can't be read: run it again with the column as its value or text.
-            let expression = type.hasPrefix("AggregateFunction")
-                ? "finalizeAggregation(\(CHSQL.quotedName(column)))" : "toString(\(CHSQL.quotedName(column)))"
-            rewrittenColumns.append(column)
-            let rewritten = "SELECT * REPLACE (\(expression) AS \(CHSQL.quotedName(column))) FROM (\n\(sql)\n)"
+            // Columns whose bytes can't be read: run it again once with them as their values or
+            // text, all of them (the server describes the result without running it), not one a run.
+            var columns = (try? await client.unreadableColumns(of: sql, parameters: parameters, sessionID: sessionID)) ?? []
+            guard !Task.isCancelled else { return }
+            if !columns.contains(where: { $0.name == column }) { columns.append((column, type)) }
+            let replaced = columns.map { name, type in
+                let quoted = CHSQL.quotedName(name)
+                return (type.hasPrefix("AggregateFunction") ? "finalizeAggregation(\(quoted))" : "toString(\(quoted))") + " AS \(quoted)"
+            }
+            rewrittenColumns += columns.map(\.name)
+            let rewritten = "SELECT * REPLACE (\(replaced.joined(separator: ", "))) FROM (\n\(sql)\n)"
             statement = rewritten
             await runForRows(rewritten, parameters: parameters, rewrites: rewrites + 1, refresh: refresh)
             return
@@ -532,8 +538,25 @@ final class QueryController {
                 guard let fitted = table.fittingWidth(ofColumnID: column.id, measuringRows: 1_000) else { continue }
                 table.setWidth(min(max(fitted, 48), Self.widest), forColumnID: column.id)
             }
+            sumsToFit = table.isComputingSummary ? source.map(ObjectIdentifier.init) : nil
         }
         onChange()
+    }
+
+    /// The result whose sums were still being computed when its columns were fitted.
+    private var sumsToFit: ObjectIdentifier?
+
+    /// The table's work changed (its delegate's `tableViewDidChangeActivity`): once the sums
+    /// of a result just fitted are in, a column they don't fit in is widened for them.
+    func tableActivityChanged() {
+        guard let fitting = sumsToFit, !table.isComputingSummary else { return }
+        sumsToFit = nil
+        guard let source, ObjectIdentifier(source) == fitting else { return }
+        for column in table.tableColumns {
+            guard let width = table.width(ofColumnID: column.id),
+                  let fitted = table.fittingWidth(ofColumnID: column.id, measuringRows: 0), fitted > width else { continue }
+            table.setWidth(min(fitted, Self.widest), forColumnID: column.id)
+        }
     }
 
     /// The widest a column gets to fit its values (longer ones are cut, the inspector shows them).

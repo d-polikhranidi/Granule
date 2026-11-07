@@ -97,9 +97,18 @@ nonisolated struct Schema {
         return text.trimmingCharacters(in: .newlines)
     }
 
-    /// The statement that shows a table's rows: no ORDER BY (the table sorts
-    /// what came), as many rows as the memory allows.
-    static func previewStatement(of table: Table) -> String {
-        "SELECT * FROM \(table.qualifiedName)"
+    /// The rows Show Rows reads at first (Show All Rows reads the rest).
+    static let previewRows = 10_000
+
+    /// The statement that shows a table's rows: no ORDER BY (the table sorts what came), its
+    /// MATERIALIZED columns too (`*` leaves them out), the first `previewRows` or all of them.
+    static func previewStatement(of table: Table, client: CHClient, all: Bool) async -> String {
+        let materialized = (try? await client.result("""
+            SELECT name FROM system.columns
+            WHERE database = \(CHSQL.quotedString(table.database)) AND table = \(CHSQL.quotedString(table.name)) AND default_kind = 'MATERIALIZED'
+            ORDER BY position
+            """).rows().compactMap(\.first)) ?? []
+        let columns = (["*"] + materialized.map(CHSQL.quotedName)).joined(separator: ", ")
+        return "SELECT \(columns) FROM \(table.qualifiedName)" + (all ? "" : "\nLIMIT \(previewRows)")
     }
 }

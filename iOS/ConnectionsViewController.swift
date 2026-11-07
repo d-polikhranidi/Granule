@@ -226,7 +226,7 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
     private func show(_ endpoint: CHEndpoint, client: CHClient) {
         let query = QueryViewController(endpoint: endpoint, client: client)
         let schema = SchemaViewController(client: client)
-        schema.onShowRows = { [weak query] table in query?.showRows(of: table) }
+        schema.onShowRows = { [weak query] table, all in query?.showRows(of: table, all: all) }
         schema.onShowCreate = { [weak query] table in query?.showCreate(of: table) }
         schema.onInsert = { [weak query] text in query?.insert(text) }
         schema.onShowView = { [weak query] view in query?.show(view) }

@@ -250,6 +250,90 @@ final class QueryHistory {
     }
 }
 
+/// Statements kept by name (Query > Save Query…), for every connection: one statement
+/// often runs on more than one server (staging, then production). A JSON file in
+/// Application Support, its queries in the order of their names.
+final class SavedQueries {
+    static let shared = SavedQueries()
+
+    struct Query: Codable, Hashable, Identifiable {
+        var id = UUID()
+        var name: String
+        var sql: String
+        var date = Date()
+    }
+
+    private(set) var queries: [Query] = []
+    /// Called when the list changed.
+    var onChange: [() -> Void] = []
+    private let file: URL
+
+    private init() {
+        let folder = (try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
+            ?? FileManager.default.temporaryDirectory
+        var name = "Saved Queries.json"
+        #if DEBUG
+        // `-ViewerSavedQueries <name>`: a file of the check's own, the user's list untouched.
+        if let check = UserDefaults.standard.string(forKey: "ViewerSavedQueries") { name = "Saved Queries \(check).json" }
+        #endif
+        file = folder.appending(path: name)
+        if let data = try? Data(contentsOf: file), let saved = try? JSONDecoder().decode([Query].self, from: data) { queries = saved }
+    }
+
+    func query(named name: String) -> Query? {
+        let wanted = name.trimmingCharacters(in: .whitespaces).lowercased()
+        return queries.first { $0.name.lowercased() == wanted }
+    }
+
+    /// Keeps a statement under a name; one of that name already is replaced.
+    func save(_ sql: String, as name: String) {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, !sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        if let index = queries.firstIndex(where: { $0.name.lowercased() == name.lowercased() }) {
+            queries[index].sql = sql
+            queries[index].name = name
+            queries[index].date = Date()
+        } else {
+            queries.append(Query(name: name, sql: sql))
+        }
+        store()
+    }
+
+    /// Gives a saved query another name; `false` when another one has that name.
+    @discardableResult
+    func rename(_ id: UUID, to name: String) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, let index = queries.firstIndex(where: { $0.id == id }) else { return false }
+        if let other = query(named: name), other.id != id { return false }
+        queries[index].name = name
+        store()
+        return true
+    }
+
+    func remove(_ id: UUID) {
+        queries.removeAll { $0.id == id }
+        store()
+    }
+
+    private func store() {
+        queries.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        if let data = try? JSONEncoder().encode(queries) { try? data.write(to: file, options: .atomic) }
+        onChange.forEach { $0() }
+    }
+
+    /// A name for a statement: its first words.
+    static func suggestedName(for sql: String) -> String {
+        let words = sql.split(whereSeparator: \.isWhitespace).prefix(6).joined(separator: " ")
+        return words.count > 50 ? String(words.prefix(50)) + "…" : words
+    }
+
+    /// A statement on one line, for lists: its whitespace folded, its first characters.
+    static func oneLine(_ sql: String, limit: Int = 200) -> String {
+        let folded = sql.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return folded.count > limit ? String(folded.prefix(limit)) + "…" : folded
+    }
+}
+
 extension CHEnvironment {
     var title: String {
         switch self {

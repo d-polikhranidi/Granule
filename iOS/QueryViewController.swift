@@ -295,6 +295,12 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                     editor.text = sql
                     SQLHighlighting.apply(to: editor.textStorage)
                     run(sql)
+                    // `-ViewerSaveAs <name>` (with `-ViewerSavedQueries <file>`): it saved by that name.
+                    if let name = UserDefaults.standard.string(forKey: "ViewerSaveAs") { SavedQueries.shared.save(sql, as: name) }
+                }
+                // `-ViewerLibrary saved|history`: Saved Queries and History at once.
+                if let library = UserDefaults.standard.string(forKey: "ViewerLibrary") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showLibrary(library == "history" ? .history : .saved) }
                 }
                 #endif
             } catch {
@@ -318,6 +324,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     @objc func stopCommand(_ sender: Any?) { queries.cancel() }
     @objc func checkCommand(_ sender: Any?) { checker.checkNow(text: editor.text, cursor: editor.selectedRange.location) }
     @objc func formatCommand(_ sender: Any?) { formatStatement() }
+    @objc func saveQueryCommand(_ sender: Any?) { saveQuery() }
+    @objc func libraryCommand(_ sender: Any?) { showLibrary(.saved) }
     @objc func findCommand(_ sender: Any?) { navigationItem.searchController?.searchBar.becomeFirstResponder() }
     @objc func explainCommand(_ sender: Any?) {
         guard let sql = currentStatement() else { return }
@@ -721,14 +729,23 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         let historyItems = history.entries.prefix(25).map { entry in
             let oneLine = entry.sql.split(whereSeparator: \.isNewline).joined(separator: " ")
             return UIAction(title: oneLine.count > 60 ? String(oneLine.prefix(60)) + "…" : oneLine) { [weak self] _ in
-                guard let self else { return }
-                editor.text = entry.sql
-                SQLHighlighting.apply(to: editor.textStorage)
+                self?.replaceEditorText(entry.sql)
             }
         }
-        let historyMenu = UIMenu(title: String(localized: "History"), image: UIImage(systemName: "clock.arrow.circlepath"),
-                                 children: historyItems.isEmpty ? [UIAction(title: String(localized: "No statements yet"), attributes: .disabled) { _ in }]
-                                     : historyItems)
+        let savedItems = SavedQueries.shared.queries.prefix(15).map { query in
+            UIAction(title: query.name) { [weak self] _ in self?.replaceEditorText(query.sql) }
+        }
+        let library = UIAction(title: String(localized: "Saved Queries and History…"), image: UIImage(systemName: "magnifyingglass")) { [weak self] _ in
+            self?.showLibrary(.history)
+        }
+        let historyMenu = UIMenu(title: String(localized: "History"), image: UIImage(systemName: "clock.arrow.circlepath"), children:
+            (savedItems.isEmpty ? [] : [UIMenu(title: String(localized: "Saved Queries"), options: .displayInline, children: Array(savedItems))])
+            + [UIMenu(options: .displayInline, children: historyItems.isEmpty
+                ? [UIAction(title: String(localized: "No statements yet"), attributes: .disabled) { _ in }] : Array(historyItems))]
+            + [UIMenu(options: .displayInline, children: [library])])
+        let save = UIAction(title: String(localized: "Save Query…"), image: UIImage(systemName: "square.and.arrow.down")) { [weak self] _ in
+            self?.saveQuery()
+        }
         let formats: [(String, String, String)] = [("CSV", "CSVWithNames", "csv"), ("TSV", "TSVWithNames", "tsv"), ("Parquet", "Parquet", "parquet"),
                                                    ("Arrow", "Arrow", "arrow"), (String(localized: "JSON lines"), "JSONEachRow", "jsonl")]
         // Export runs the statement again: a write would run twice.
@@ -782,7 +799,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             guard let self else { return }
             AppDelegate.presentSettings(from: self)
         }
-        return [chartAction, historyMenu, check, format, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize, settings]
+        return [chartAction, historyMenu, save, check, format, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize, settings]
     }
 
     /// Format Statement: the selection, or the statement at the cursor, laid out by the server's
@@ -810,6 +827,49 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                 statusLabel.text = String(localized: "Can't format: \(error.viewerSummary)")
             }
         }
+    }
+
+    /// The editor's text replaced (a statement from the history or the saved queries); Undo takes it back.
+    private func replaceEditorText(_ text: String) {
+        replace(NSRange(location: 0, length: (editor.text as NSString).length), with: text)
+        SQLHighlighting.apply(to: editor.textStorage)
+    }
+
+    /// Save Query: the selection, or the statement at the cursor, kept by a name for every connection.
+    private func saveQuery() {
+        guard let sql = currentStatement() else { return }
+        let known = SavedQueries.shared.queries.first { $0.sql == sql }
+        let alert = UIAlertController(title: String(localized: "Save Query"),
+                                      message: String(localized: "Saved queries are kept for every connection."), preferredStyle: .alert)
+        alert.addTextField { field in
+            field.text = known?.name ?? SavedQueries.suggestedName(for: sql)
+            field.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "Save"), style: .default) { [weak self, weak alert] _ in
+            guard let self, let name = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { return }
+            if let existing = SavedQueries.shared.query(named: name), existing.sql != sql {
+                let replace = UIAlertController(title: String(localized: "Replace “\(existing.name)”?"),
+                                                message: String(localized: "A saved query has this name already."), preferredStyle: .alert)
+                replace.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+                replace.addAction(UIAlertAction(title: String(localized: "Replace"), style: .destructive) { [weak self] _ in
+                    SavedQueries.shared.save(sql, as: name)
+                    self?.statusLabel.text = String(localized: "Saved as “\(name)”.")
+                })
+                presentOnTop(replace)
+                return
+            }
+            SavedQueries.shared.save(sql, as: name)
+            statusLabel.text = String(localized: "Saved as “\(name)”.")
+        })
+        presentOnTop(alert)
+    }
+
+    /// Saved Queries and History, in a sheet.
+    private func showLibrary(_ kind: QueryLibraryController.Kind) {
+        let library = QueryLibraryController(history: history, kind: kind)
+        library.onOpen = { [weak self] sql in self?.replaceEditorText(sql) }
+        presentOnTop(UINavigationController(rootViewController: library))
     }
 
     private func resizeEditor(by delta: CGFloat) {
@@ -923,5 +983,116 @@ final class CellInspectorController: UIViewController {
               let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         else { return nil }
         return String(data: pretty, encoding: .utf8)
+    }
+}
+
+/// Saved Queries and History: the queries saved by name and the statements this
+/// connection ran, searched as typed; a tap puts one in the editor, a swipe deletes a
+/// saved one.
+final class QueryLibraryController: UITableViewController, UISearchResultsUpdating {
+    enum Kind: Int { case saved, history }
+
+    /// The statement chosen, for the editor.
+    var onOpen: (String) -> Void = { _ in }
+
+    private let history: QueryHistory
+    private var kind: Kind
+    private var savedRows: [SavedQueries.Query] = []
+    private var historyRows: [QueryHistory.Entry] = []
+    private let picker = UISegmentedControl(items: [String(localized: "Saved"), String(localized: "History")])
+
+    init(history: QueryHistory, kind: Kind) {
+        self.history = history
+        self.kind = kind
+        super.init(style: .insetGrouped)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        picker.selectedSegmentIndex = kind.rawValue
+        picker.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            kind = Kind(rawValue: picker.selectedSegmentIndex) ?? .saved
+            filter()
+        }, for: .valueChanged)
+        navigationItem.titleView = picker
+        navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+        let search = UISearchController(searchResultsController: nil)
+        search.searchResultsUpdater = self
+        search.obscuresBackgroundDuringPresentation = false
+        search.searchBar.placeholder = String(localized: "Find in names and statements")
+        search.searchBar.autocapitalizationType = .none
+        navigationItem.searchController = search
+        navigationItem.hidesSearchBarWhenScrolling = false
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "query")
+        filter()
+    }
+
+    func updateSearchResults(for searchController: UISearchController) { filter() }
+
+    private func filter() {
+        let words = (navigationItem.searchController?.searchBar.text ?? "").lowercased().split(whereSeparator: \.isWhitespace)
+        func matches(_ text: String) -> Bool {
+            let lowered = text.lowercased()
+            return words.allSatisfy { lowered.contains($0) }
+        }
+        savedRows = SavedQueries.shared.queries.filter { matches($0.name + " " + $0.sql) }
+        historyRows = history.entries.filter { matches($0.sql) }
+        tableView.reloadData()
+        var empty: UIContentUnavailableConfiguration?
+        if (kind == .saved ? savedRows.count : historyRows.count) == 0 {
+            var configuration = words.isEmpty ? UIContentUnavailableConfiguration.empty() : .search()
+            if words.isEmpty {
+                configuration.text = kind == .saved ? String(localized: "No Saved Queries") : String(localized: "No Statements Yet")
+                configuration.secondaryText = kind == .saved ? String(localized: "More > Save Query keeps a statement by a name, for every connection.") : nil
+            }
+            empty = configuration
+        }
+        contentUnavailableConfiguration = empty
+    }
+
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
+        kind == .saved ? savedRows.count : historyRows.count
+    }
+
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "query", for: indexPath)
+        var content = UIListContentConfiguration.subtitleCell()
+        switch kind {
+        case .saved:
+            let query = savedRows[indexPath.row]
+            content.text = query.name
+            content.secondaryText = SavedQueries.oneLine(query.sql, limit: 120)
+        case .history:
+            let entry = historyRows[indexPath.row]
+            content.text = SavedQueries.oneLine(entry.sql, limit: 120)
+            content.secondaryText = [entry.date.formatted(date: .abbreviated, time: .shortened),
+                                     entry.rows.map { $0 == 1 ? String(localized: "1 row") : String(localized: "\($0.formatted()) rows") }]
+                .compactMap { $0 }.joined(separator: " · ")
+        }
+        content.secondaryTextProperties.font = .monospacedSystemFont(ofSize: UIFont.smallSystemFontSize, weight: .regular)
+        content.secondaryTextProperties.numberOfLines = 2
+        cell.contentConfiguration = content
+        return cell
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let sql = kind == .saved ? savedRows[indexPath.row].sql : historyRows[indexPath.row].sql
+        dismiss(animated: true)
+        onOpen(sql)
+    }
+
+    override func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+        guard kind == .saved else { return nil }
+        let query = savedRows[indexPath.row]
+        let delete = UIContextualAction(style: .destructive, title: String(localized: "Delete")) { [weak self] _, _, done in
+            SavedQueries.shared.remove(query.id)
+            self?.filter()
+            done(true)
+        }
+        return UISwipeActionsConfiguration(actions: [delete])
     }
 }

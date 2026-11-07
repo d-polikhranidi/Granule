@@ -215,7 +215,9 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
     /// used; inserts delayed; dictionaries that failed to load; queries over ten minutes
     /// and merges over an hour. Across a cluster each check reads every replica. (No scalar
     /// subqueries: 23.8's analyzer loses a column made with one in a UNION's branch.)
-    static func healthSQL(cluster: String?) -> String {
+    /// `hiding`: the system tables this user may not read (their checks left out: one such
+    /// table would fail the whole UNION, as the public playground's user found with `replicas`).
+    static func healthSQL(cluster: String?, hiding hidden: Set<String> = []) -> String {
         func from(_ table: String) -> String {
             cluster.map { "clusterAllReplicas(\(CHSQL.quotedString($0)), system.\(table))" } ?? "system.\(table)"
         }
@@ -299,9 +301,13 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
             FROM \(from("merges"))
             WHERE elapsed > 3600
             """,
-        ]
+        ].filter { check in
+            !hidden.contains { check.range(of: "system\\.\($0)\\b", options: .regularExpression) != nil }
+        }
         let columns = (cluster == nil ? "" : "host, ") + "status, check, subject, value, detail"
-        return "SELECT \(columns) FROM (\n" + checks.joined(separator: "\nUNION ALL\n") + "\n)\nORDER BY status = 'Error' DESC, check, subject"
+        // The columns' names from a first branch of no rows: whichever checks are left.
+        let names = "SELECT \(cluster == nil ? "" : "'' AS host, ")'' AS status, '' AS check, '' AS subject, '' AS value, '' AS detail WHERE 0"
+        return "SELECT \(columns) FROM (\n" + ([names] + checks).joined(separator: "\nUNION ALL\n") + "\n)\nORDER BY status = 'Error' DESC, check, subject"
     }
 
     /// A row's kill statement, from its values by column name (`nil`: none

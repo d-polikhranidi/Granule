@@ -329,7 +329,7 @@ struct CHServerTests {
 /// A user with readonly = 1 (no settings in a request): created by the tests' user if it may.
 @Suite(.enabled(if: TestServer.isAvailable, "CH_TEST_URL names no server"), .serialized)
 struct CHReadonlyUserTests {
-    static func reader() async throws -> CHClient? {
+    static func reader(compression: CHCompression = .automatic) async throws -> CHClient? {
         let admin = try await TestServer.connected()
         do {
             _ = try await admin.plainText("CREATE USER IF NOT EXISTS viewer_test_reader IDENTIFIED BY 'reader' SETTINGS readonly = 1")
@@ -339,6 +339,7 @@ struct CHReadonlyUserTests {
         }
         var endpoint = admin.endpoint
         endpoint.user = "viewer_test_reader"
+        endpoint.compression = compression
         let client = CHClient(endpoint: endpoint, password: "reader")
         let info = try await client.connect()
         #expect(info.readonly == 1)
@@ -355,6 +356,14 @@ struct CHReadonlyUserTests {
         #expect(result.typeNames[1] == "DateTime('Europe/Berlin')")
         let context = CHTextContext(defaultTimeZone: .gmt)
         #expect(result.blocks[0].columns[1].text(0, context: context) == "2026-03-29 00:30:00")
+    }
+
+    /// Over a connection that compresses, such a user can't name the method (the server's may
+    /// be ZSTD, as the public playground's is: `CHPlaygroundTests`): its results come plain.
+    @Test func readsOverACompressedConnection() async throws {
+        guard let client = try await Self.reader(compression: .lz4) else { return }
+        let result = try await client.result("SELECT number, toString(number) AS s FROM numbers(200000)")
+        #expect(result.rowCount == 200_000)
     }
 
     @Test func theLimitHoldsOnTheViewersSide() async throws {
@@ -517,5 +526,23 @@ struct CHSSHTunnelTests {
             if case .hostKeyChanged = failure {} else { Issue.record("\(failure)") }
         }
         #expect(throws: CHSSHKey.Failure.needsPassphrase) { _ = try CHSSHKey.parse(Self.settings(key: "id_locked").privateKey ?? "") }
+    }
+}
+
+/// ClickHouse's public playground (play.clickhouse.com, the user `explorer`: readonly = 1, its
+/// compression ZSTD): what App Review and a first launch can reach. Over the internet, so only
+/// with `CH_PLAYGROUND=1`.
+@Suite(.enabled(if: ProcessInfo.processInfo.environment["CH_PLAYGROUND"] != nil, "CH_PLAYGROUND isn't set"), .serialized)
+struct CHPlaygroundTests {
+    @Test func thePlaygroundIsRead() async throws {
+        let (endpoint, _) = try #require(CHEndpoint.parse("https://explorer@play.clickhouse.com:443"))
+        #expect(endpoint.compressesResults)
+        let client = CHClient(endpoint: endpoint, password: "")
+        let info = try await client.connect(timeout: 30)
+        #expect(info.readonly == 1)
+        let result = try await client.result("SELECT number, toString(number) AS s FROM numbers(100000)")
+        #expect(result.rowCount == 100_000)
+        // The schema's tables, as the sidebar reads them.
+        #expect(try await client.result("SELECT database, name FROM system.tables LIMIT 10").rowCount > 0)
     }
 }

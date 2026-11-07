@@ -721,6 +721,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         case 1: "EXPLAIN PIPELINE \(sql) FORMAT TSVRaw"
         case 2: "EXPLAIN ESTIMATE \(sql)"
         case 3: "EXPLAIN SYNTAX \(sql) FORMAT TSVRaw"
+        case 6: "EXPLAIN ANALYZE \(sql) FORMAT TSVRaw"
         default: "EXPLAIN PLAN indexes = 1 \(sql) FORMAT TSVRaw"
         }
         run(explain)
@@ -1474,6 +1475,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         case #selector(showValue(_:)): queries.source != nil
         case #selector(checkStatement(_:)), #selector(formatStatement(_:)): client.serverInfo != nil
         case #selector(showQueryDetails(_:)): lastRun?.queryID != nil && !queries.isRunning
+        // Explain Analyze: 26.7 and later.
+        case #selector(explainStatement(_:)): item.tag != 6 || queries.explainsAnalyze
         default: true
         }
     }

@@ -132,13 +132,22 @@ final class QueryController {
         }
     }
 
+    /// Whether the server has `EXPLAIN ANALYZE` (the plan with each step's time and rows, the query run): 26.7 and later.
+    var explainsAnalyze: Bool { client.serverInfo?.version.isAtLeast(26, 7) ?? false }
+
     // MARK: Large reads
 
     /// The question before a query the server estimates to read more rows than Settings › Queries
     /// allows (`nil`: run it). A query that stops at its LIMIT, a statement with its own FORMAT,
     /// tables the server can't tell (not MergeTree) and an estimate that fails or takes over
     /// two seconds say nothing.
-    func largeReadQuestion(for sql: String, parameters: [String: String]) async -> (title: String, detail: String)? {
+    func largeReadQuestion(for statement: String, parameters: [String: String]) async -> (title: String, detail: String)? {
+        // Explain Analyze runs the query it explains: that one's estimate.
+        var sql = statement
+        if let analyzed = sql.range(of: #"^\s*EXPLAIN\s+ANALYZE\s+"#, options: [.regularExpression, .caseInsensitive]) {
+            sql = String(sql[analyzed.upperBound...])
+            if let format = sql.range(of: #"\s+FORMAT\s+\w+\s*$"#, options: [.regularExpression, .caseInsensitive]) { sql.removeSubrange(format) }
+        }
         guard LargeReads.asks, ["SELECT", "WITH", "FROM"].contains(CHSQL.firstWord(of: sql) ?? ""),
               CHSQL.formatClause(of: sql) == nil, !CHSQL.stopsEarly(sql) else { return nil }
         let database = currentDatabase ?? (client.endpoint.database.isEmpty ? nil : client.endpoint.database)

@@ -220,6 +220,10 @@ final class QueryHistory {
         var date: Date
         var rows: Int?
         var seconds: Double?
+        /// The server's id of this run, and of the run of the same statement before it:
+        /// Query Details compares them (from `system.query_log`).
+        var queryID: String?
+        var previousQueryID: String?
     }
 
     init(endpoint: CHEndpoint) {
@@ -240,13 +244,18 @@ final class QueryHistory {
         try? FileManager.default.removeItem(at: file(for: id))
     }
 
-    func add(_ sql: String, rows: Int?, seconds: Double?) {
+    /// Keeps a statement run; the run of it before (if any) is remembered for comparing.
+    @discardableResult
+    func add(_ sql: String, rows: Int?, seconds: Double?, queryID: String? = nil) -> Entry? {
         let trimmed = sql.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard !trimmed.isEmpty else { return nil }
+        let previous = entries.first { $0.sql == trimmed }?.queryID
         entries.removeAll { $0.sql == trimmed }
-        entries.insert(Entry(sql: trimmed, date: Date(), rows: rows, seconds: seconds), at: 0)
+        let entry = Entry(sql: trimmed, date: Date(), rows: rows, seconds: seconds, queryID: queryID, previousQueryID: previous)
+        entries.insert(entry, at: 0)
         if entries.count > Self.limit { entries.removeLast(entries.count - Self.limit) }
         if let data = try? JSONEncoder().encode(entries) { try? data.write(to: file, options: .atomic) }
+        return entry
     }
 }
 

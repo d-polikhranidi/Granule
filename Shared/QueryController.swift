@@ -111,8 +111,57 @@ final class QueryController {
             guard let self else { return }
             cancel()
             view = nil
+            isViewersOwn = false
             start(sql, parameters: parameters, refresh: false)
         }
+    }
+
+    /// A statement of the viewer's own shown as a result (a query's details): kept out of the
+    /// history and marked as the viewer's in the server's log.
+    private(set) var isViewersOwn = false
+
+    func runViewersOwn(_ sql: String) {
+        whenWriteMayStop { [weak self] in
+            guard let self else { return }
+            cancel()
+            view = nil
+            isViewersOwn = true
+            start(sql, parameters: [:], refresh: false)
+        }
+    }
+
+    /// Whether the statement shown is the user's (not a server view or the viewer's own).
+    var isUsersStatement: Bool { view == nil && !isViewersOwn }
+
+    /// Query Details: a run's measures from `system.query_log` (its time, rows and bytes read,
+    /// memory, then every ProfileEvent), beside the run of the same statement before, if any.
+    nonisolated static func detailsSQL(of queryID: String, comparedWith previous: String?) -> String {
+        func measures(_ id: String) -> String {
+            """
+            (SELECT argMax(mapUpdate(map('Duration, ms', toUInt64(query_duration_ms), 'Rows read', toUInt64(read_rows),
+                                         'Bytes read', toUInt64(read_bytes), 'Rows in the result', toUInt64(result_rows),
+                                         'Memory, bytes', toUInt64(greatest(memory_usage, 0))),
+                                     CAST(ProfileEvents, 'Map(String, UInt64)')), event_time)
+             FROM system.query_log
+             WHERE event_date >= today() - 30 AND query_id = \(CHSQL.quotedString(id)) AND type IN ('QueryFinish', 'ExceptionWhileProcessing'))
+            """
+        }
+        let order = "['Duration, ms', 'Rows read', 'Bytes read', 'Rows in the result', 'Memory, bytes']"
+        guard let previous else {
+            return """
+                WITH \(measures(queryID)) AS now_m
+                SELECT name AS measure, now_m[name] AS value
+                FROM (SELECT mapKeys(now_m) AS names) ARRAY JOIN names AS name
+                ORDER BY indexOf(\(order), name) = 0, indexOf(\(order), name), value DESC
+                """
+        }
+        return """
+            WITH \(measures(queryID)) AS now_m, \(measures(previous)) AS before_m
+            SELECT name AS measure, before_m[name] AS before, now_m[name] AS now,
+                   if(before = 0, NULL, round((toFloat64(now) - before) / before * 100, 1) + 0) AS change_percent
+            FROM (SELECT arrayDistinct(arrayConcat(mapKeys(now_m), mapKeys(before_m))) AS names) ARRAY JOIN names AS name
+            ORDER BY indexOf(\(order), name) = 0, indexOf(\(order), name), greatest(now, before) DESC
+            """
     }
 
     /// A server view: its rows, read again every two seconds while it's live
@@ -221,8 +270,8 @@ final class QueryController {
         if view == nil { monitor(options.queryID) }
         options.sessionID = sessionID
         options.parameters = parameters
-        // A server view is the viewer's own query: left out of the views of the log.
-        options.isBackground = view != nil
+        // A server view and a query's details are the viewer's own: left out of the views of the log.
+        options.isBackground = view != nil || isViewersOwn
         let budget = Self.budget
         options.maxRows = budget.rows
         options.maxBytes = budget.bytes

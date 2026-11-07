@@ -469,6 +469,14 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                     editor.string = sql
                     run(sql)
                 }
+                // `-ViewerSaveAs <name>`: the `-ViewerRun` statement saved by that name (with
+                // `-ViewerSavedQueries <file>`, in a list of the check's own); `-ViewerLibrary saved|history`: the sheet.
+                if let name = UserDefaults.standard.string(forKey: "ViewerSaveAs"), let sql = UserDefaults.standard.string(forKey: "ViewerRun") {
+                    SavedQueries.shared.save(sql, as: name)
+                }
+                if let library = UserDefaults.standard.string(forKey: "ViewerLibrary") {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.showLibrary(library == "history" ? .history : .saved) }
+                }
                 FileHandle.standardError.write(Data("VIEWER-WINDOW \(window?.windowNumber ?? 0)\n".utf8))
                 #endif
             } catch {
@@ -1332,10 +1340,28 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     /// The history menu: the last statements run, newest first.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        // The saved queries first, then the last statements run.
+        let saved = SavedQueries.shared.queries
+        if !saved.isEmpty {
+            menu.addItem(.sectionHeader(title: String(localized: "Saved Queries")))
+            for query in saved.prefix(20) {
+                let item = NSMenuItem(title: query.name, action: #selector(chooseHistory(_:)), keyEquivalent: "")
+                item.target = self
+                item.representedObject = query.sql
+                item.toolTip = query.sql
+                menu.addItem(item)
+            }
+            menu.addItem(.separator())
+        }
+        defer {
+            menu.addItem(.separator())
+            menu.addItem(MenuAction(String(localized: "Saved Queries and History…")) { [weak self] in self?.showLibrary(.history) }.item)
+        }
         guard !history.entries.isEmpty else {
             menu.addItem(withTitle: String(localized: "No statements yet"), action: nil, keyEquivalent: "")
             return
         }
+        menu.addItem(.sectionHeader(title: String(localized: "History")))
         for entry in history.entries.prefix(40) {
             let oneLine = entry.sql.split(whereSeparator: \.isNewline).joined(separator: " ")
             let title = oneLine.count > 90 ? String(oneLine.prefix(90)) + "…" : oneLine
@@ -1347,10 +1373,261 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         }
     }
 
+    /// Query > Save Query… (⌘S): the selection, or the statement at the cursor, kept by a
+    /// name for every connection (Saved Queries and History, ⌘Y, finds it again).
+    @objc func saveQuery(_ sender: Any?) {
+        guard let sql = currentStatement(), let window else { return }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Save Query")
+        alert.informativeText = String(localized: "Saved queries are kept for every connection. Saved Queries and History (⌘Y) finds them.")
+        let known = SavedQueries.shared.queries.first { $0.sql == sql }
+        let field = NSTextField(string: known?.name ?? SavedQueries.suggestedName(for: sql))
+        field.frame = NSRect(x: 0, y: 0, width: 300, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: String(localized: "Save"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            let name = field.stringValue.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { return }
+            if let existing = SavedQueries.shared.query(named: name), existing.sql != sql {
+                let replace = NSAlert()
+                replace.messageText = String(localized: "Replace “\(existing.name)”?")
+                replace.informativeText = String(localized: "A saved query has this name already.")
+                replace.addButton(withTitle: String(localized: "Replace"))
+                replace.addButton(withTitle: String(localized: "Cancel"))
+                replace.beginSheetModal(for: window) { [weak self] answer in
+                    guard answer == .alertFirstButtonReturn else { return }
+                    SavedQueries.shared.save(sql, as: name)
+                    self?.statusLabel.stringValue = String(localized: "Saved as “\(name)”.")
+                }
+                return
+            }
+            SavedQueries.shared.save(sql, as: name)
+            statusLabel.stringValue = String(localized: "Saved as “\(name)”.")
+        }
+    }
+
+    /// Query > Saved Queries and History… (⌘Y).
+    @objc func showQueryLibrary(_ sender: Any?) {
+        showLibrary(.saved)
+    }
+
+    private func showLibrary(_ kind: QueryLibraryController.Kind) {
+        let library = QueryLibraryController(history: history, kind: kind)
+        library.onOpen = { [weak self] sql in
+            guard let self else { return }
+            replaceEditorText(sql)
+            window?.makeFirstResponder(editor)
+        }
+        window?.contentViewController?.presentAsSheet(library)
+    }
+
     @objc private func chooseHistory(_ sender: NSMenuItem) {
         guard let sql = sender.representedObject as? String else { return }
         replaceEditorText(sql)
         window?.makeFirstResponder(editor)
+    }
+}
+
+/// Saved Queries and History (⌘Y): the queries saved by name and the statements this
+/// connection ran, searched as typed. Open (or a double-click) puts one in the editor.
+final class QueryLibraryController: NSViewController, GHTableViewDataSource, GHTableViewDelegate, NSSearchFieldDelegate {
+    enum Kind: Int { case saved, history }
+
+    /// The statement chosen, for the editor.
+    var onOpen: (String) -> Void = { _ in }
+
+    private let history: QueryHistory
+    private var kind: Kind
+    private let picker = NSSegmentedControl(labels: [String(localized: "Saved"), String(localized: "History")],
+                                            trackingMode: .selectOne, target: nil, action: nil)
+    private let search = NSSearchField()
+    private let table = GHTableView(frame: .zero)
+    private let openButton = NSButton(title: String(localized: "Open"), target: nil, action: nil)
+    private let renameButton = NSButton(title: String(localized: "Rename…"), target: nil, action: nil)
+    private let deleteButton = NSButton(title: String(localized: "Delete…"), target: nil, action: nil)
+    private var savedRows: [SavedQueries.Query] = []
+    private var historyRows: [QueryHistory.Entry] = []
+
+    init(history: QueryHistory, kind: Kind) {
+        self.history = history
+        self.kind = kind
+        super.init(nibName: nil, bundle: nil)
+        preferredContentSize = NSSize(width: 780, height: 460)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func loadView() {
+        picker.selectedSegment = kind.rawValue
+        picker.target = self
+        picker.action = #selector(pickKind(_:))
+        search.placeholderString = String(localized: "Find in names and statements")
+        search.delegate = self
+        table.dataSource = self
+        table.delegate = self
+        table.sortsRows = true
+        table.allowsMultipleSelection = false
+        table.autosaveName = nil
+        table.showsSummaryRow = false
+        table.usesAlternatingRowBackgroundColors = false
+        table.target = self
+        table.doubleAction = #selector(open(_:))
+        for button in [openButton, renameButton, deleteButton] { button.target = self }
+        openButton.action = #selector(open(_:))
+        openButton.keyEquivalent = "\r"
+        renameButton.action = #selector(rename(_:))
+        deleteButton.action = #selector(delete(_:))
+        let cancel = NSButton(title: String(localized: "Cancel"), target: self, action: #selector(cancel(_:)))
+        cancel.keyEquivalent = "\u{1b}"
+        let top = NSStackView(views: [picker, search])
+        search.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let bottom = NSStackView(views: [renameButton, deleteButton, NSView(), cancel, openButton])
+        let stack = NSStackView(views: [top, table, bottom])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 10
+        stack.edgeInsets = NSEdgeInsets(top: 16, left: 16, bottom: 16, right: 16)
+        for view in [top, table, bottom] { view.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -32).isActive = true }
+        table.setContentHuggingPriority(.defaultLow, for: .vertical)
+        view = stack
+        showKind()
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        view.window?.makeFirstResponder(search)
+    }
+
+    @objc private func pickKind(_ sender: NSSegmentedControl) {
+        kind = Kind(rawValue: sender.selectedSegment) ?? .saved
+        showKind()
+    }
+
+    private func showKind() {
+        table.columns = switch kind {
+        case .saved: [
+            .column(GHTableColumn("name", title: String(localized: "Name"), width: 200, minWidth: 80, maxWidth: 600)),
+            .column(GHTableColumn("sql", title: String(localized: "Statement"), width: 380, minWidth: 120, maxWidth: 4_000)),
+            .column(GHTableColumn("date", title: String(localized: "Saved"), width: 150, format: .date(includesTime: true))),
+        ]
+        case .history: [
+            .column(GHTableColumn("date", title: String(localized: "Run"), width: 150, format: .date(includesTime: true))),
+            .column(GHTableColumn("sql", title: String(localized: "Statement"), width: 400, minWidth: 120, maxWidth: 4_000)),
+            .column(GHTableColumn("rows", title: String(localized: "Rows"), width: 80, alignment: .trailing, format: .number(fractionDigits: 0))),
+            .column(GHTableColumn("seconds", title: String(localized: "Seconds"), width: 80, alignment: .trailing, format: .number(fractionDigits: 3))),
+        ]
+        }
+        table.sortDescriptors = []
+        filter()
+    }
+
+    private func filter() {
+        let words = search.stringValue.lowercased().split(whereSeparator: \.isWhitespace)
+        func matches(_ text: String) -> Bool {
+            let lowered = text.lowercased()
+            return words.allSatisfy { lowered.contains($0) }
+        }
+        savedRows = SavedQueries.shared.queries.filter { matches($0.name + " " + $0.sql) }
+        historyRows = history.entries.filter { matches($0.sql) }
+        table.reloadData()
+        if numberOfRows(in: table) > 0 { table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+        updateButtons()
+    }
+
+    func controlTextDidChange(_ notification: Notification) { filter() }
+
+    private func updateButtons() {
+        let chosen = table.selectedRow >= 0
+        openButton.isEnabled = chosen
+        renameButton.isHidden = kind != .saved
+        deleteButton.isHidden = kind != .saved
+        renameButton.isEnabled = chosen
+        deleteButton.isEnabled = chosen
+    }
+
+    func tableViewSelectionDidChange(_ notification: Notification) { updateButtons() }
+
+    // MARK: Rows
+
+    func numberOfRows(in tableView: GHTableView) -> Int { kind == .saved ? savedRows.count : historyRows.count }
+
+    func tableView(_ tableView: GHTableView, valueFor column: GHTableColumn, row: Int) -> GHCellValue {
+        switch kind {
+        case .saved:
+            guard row < savedRows.count else { return .empty }
+            let query = savedRows[row]
+            return switch column.id {
+            case "name": .text(query.name)
+            case "sql": .text(SavedQueries.oneLine(query.sql))
+            default: .date(query.date)
+            }
+        case .history:
+            guard row < historyRows.count else { return .empty }
+            let entry = historyRows[row]
+            return switch column.id {
+            case "date": .date(entry.date)
+            case "sql": .text(SavedQueries.oneLine(entry.sql))
+            case "rows": entry.rows.map { .number(Double($0)) } ?? .empty
+            default: entry.seconds.map { .number($0) } ?? .empty
+            }
+        }
+    }
+
+    // MARK: Actions
+
+    private var chosenSQL: String? {
+        let row = table.selectedRow
+        guard row >= 0 else { return nil }
+        return kind == .saved ? (row < savedRows.count ? savedRows[row].sql : nil) : (row < historyRows.count ? historyRows[row].sql : nil)
+    }
+
+    @objc private func open(_ sender: Any?) {
+        guard let sql = chosenSQL else { return }
+        dismiss(nil)
+        onOpen(sql)
+    }
+
+    @objc private func cancel(_ sender: Any?) { dismiss(nil) }
+
+    @objc private func rename(_ sender: Any?) {
+        guard kind == .saved, table.selectedRow >= 0, table.selectedRow < savedRows.count, let window = view.window else { return }
+        let query = savedRows[table.selectedRow]
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Rename the Saved Query")
+        let field = NSTextField(string: query.name)
+        field.frame = NSRect(x: 0, y: 0, width: 280, height: 24)
+        alert.accessoryView = field
+        alert.addButton(withTitle: String(localized: "Rename"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            if !SavedQueries.shared.rename(query.id, to: field.stringValue) {
+                let taken = NSAlert()
+                taken.messageText = String(localized: "Another saved query has this name.")
+                taken.beginSheetModal(for: window)
+            }
+            self?.filter()
+        }
+    }
+
+    @objc private func delete(_ sender: Any?) {
+        guard kind == .saved, table.selectedRow >= 0, table.selectedRow < savedRows.count, let window = view.window else { return }
+        let query = savedRows[table.selectedRow]
+        let alert = NSAlert()
+        alert.messageText = String(localized: "Delete “\(query.name)”?")
+        alert.informativeText = String(localized: "It's gone for every connection.")
+        alert.addButton(withTitle: String(localized: "Delete"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.buttons[0].hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            SavedQueries.shared.remove(query.id)
+            self?.filter()
+        }
     }
 }
 

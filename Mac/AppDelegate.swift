@@ -166,6 +166,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item(String(localized: "Check Statement"), #selector(QueryWindowController.checkStatement(_:)), "b"),
             item(String(localized: "Format Statement"), #selector(QueryWindowController.formatStatement(_:)), "f", [.control, .shift]),
             .separator(),
+            item(String(localized: "Save Query…"), #selector(QueryWindowController.saveQuery(_:)), "s"),
+            item(String(localized: "Saved Queries and History…"), #selector(QueryWindowController.showQueryLibrary(_:)), "y"),
+            .separator(),
             {
                 let explain = item(String(localized: "Explain Plan"), #selector(QueryWindowController.explainStatement(_:)), "\r", [.command, .option])
                 explain.tag = 0

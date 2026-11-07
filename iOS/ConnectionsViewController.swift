@@ -1,10 +1,11 @@
 import ClickHouseCore
 import UIKit
+import UniformTypeIdentifiers
 
 /// The servers the user added: tap one to open it, swipe to edit or remove,
 /// + to add one (a URL pasted fills its form in). On the iPad a connection
 /// opens in a window of its own too (its menu, or dragged out of the list).
-final class ConnectionsViewController: UICollectionViewController, UICollectionViewDragDelegate {
+final class ConnectionsViewController: UICollectionViewController, UICollectionViewDragDelegate, UIDocumentPickerDelegate {
     private var dataSource: UICollectionViewDiffableDataSource<Int, UUID>!
     /// The connection this window shows, if one is open (its window is restored to it).
     private(set) var shownEndpoint: CHEndpoint?
@@ -43,7 +44,13 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
         super.viewDidLoad()
         title = String(localized: "Connections")
         navigationController?.navigationBar.prefersLargeTitles = true
-        navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .add, primaryAction: UIAction { [weak self] _ in self?.edit(nil) })
+        // A new connection, or those of clickhouse-client's configuration.
+        navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .add, menu: UIMenu(children: [
+            UIAction(title: String(localized: "New Connection"), image: UIImage(systemName: "plus")) { [weak self] _ in self?.edit(nil) },
+            UIAction(title: String(localized: "Import from clickhouse-client…"), image: UIImage(systemName: "square.and.arrow.down")) { [weak self] _ in
+                self?.importFromClient(nil)
+            },
+        ]))
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: String(localized: "Settings"), image: UIImage(systemName: "gearshape"),
                                                            primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
@@ -176,6 +183,24 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
         present(UINavigationController(rootViewController: ConnectionFormViewController(endpoint: endpoint, isNew: true)), animated: false)
     }
     #endif
+
+    /// clickhouse-client's configuration (config.xml or config.yaml) chosen in Files, its
+    /// connections added to the list.
+    @objc func importFromClient(_ sender: Any?) {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.xml, .yaml], asCopy: true)
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        let found = (try? Data(contentsOf: url)).map(CHClientConfig.connections(in:)) ?? []
+        let (added, skipped) = Connections.shared.add(found)
+        let summary = Connections.importSummary(of: found, added: added, skipped: skipped)
+        let alert = UIAlertController(title: summary.title, message: summary.detail, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "OK"), style: .default))
+        present(alert, animated: true)
+    }
 
     private func edit(_ endpoint: CHEndpoint?) {
         let form = ConnectionFormViewController(endpoint: endpoint ?? CHEndpoint(name: ""), isNew: endpoint == nil)

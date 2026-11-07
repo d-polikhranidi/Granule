@@ -17,6 +17,7 @@ final class Connections {
     /// `-ViewerForm testfail` and `ssh` run on a list and Keychain entries of their own (the
     /// user's aren't touched, and nothing made by another build is read).
     static let isChecking = ["testfail", "ssh"].contains(UserDefaults.standard.string(forKey: "ViewerForm"))
+        || UserDefaults.standard.string(forKey: "ViewerImport") != nil
     private static let key = isChecking ? "ConnectionsForChecks" : "Connections"
     #else
     private static let key = "Connections"
@@ -105,6 +106,54 @@ final class Connections {
         let base = base.trimmingCharacters(in: .whitespaces)
         guard isNameTaken(base, except: id) else { return base }
         return (2...).lazy.map { "\(base) \($0)" }.first { !self.isNameTaken($0, except: id) }!
+    }
+
+    /// clickhouse-client's connections added to the list, each named as there (or by its host,
+    /// as a new one is), its password kept; those in the list already (the same host, port,
+    /// user and database) left out.
+    func add(_ imported: [CHClientConfig.Connection]) -> (added: [CHEndpoint], skipped: Int) {
+        var added: [CHEndpoint] = [], skipped = 0
+        for connection in imported {
+            var endpoint = connection.endpoint
+            let isThere = endpoints.contains {
+                $0.host.lowercased() == endpoint.host.lowercased() && $0.port == endpoint.port && $0.user == endpoint.user
+                    && $0.database == endpoint.database
+            }
+            if isThere {
+                skipped += 1
+                continue
+            }
+            if endpoint.name.isEmpty {
+                endpoint.name = suggestedName(host: endpoint.host, except: nil)
+                endpoint.nameIsSuggested = true
+            } else {
+                endpoint.name = uniqueName(endpoint.name, except: nil)
+            }
+            save(endpoint, password: connection.password ?? "")
+            added.append(endpoint)
+        }
+        return (added, skipped)
+    }
+
+    /// What an import did, as an alert says it.
+    static func importSummary(of found: [CHClientConfig.Connection], added: [CHEndpoint], skipped: Int) -> (title: String, detail: String) {
+        guard !found.isEmpty else {
+            return (String(localized: "No connections in this file"),
+                    String(localized: "clickhouse-client keeps them under connections_credentials, or its server under host."))
+        }
+        var lines: [String] = []
+        if !added.isEmpty { lines.append(added.map(\.name).joined(separator: ", ")) }
+        if skipped > 0 {
+            lines.append(skipped == 1 ? String(localized: "One was in the list already.")
+                                      : String(localized: "\(skipped) were in the list already."))
+        }
+        let moved = found.filter { $0.nativePort != nil && added.map(\.host).contains($0.endpoint.host) }
+        if !moved.isEmpty {
+            lines.append(String(localized: "clickhouse-client's native ports became the HTTP interface's (9000 → 8123, 9440 → 8443): change them if the server listens elsewhere."))
+        }
+        let title = added.isEmpty ? String(localized: "No new connections")
+            : added.count == 1 ? String(localized: "Imported a connection") : String(localized: "Imported \(added.count) connections")
+        return (title, lines.joined(separator: "\n\n"))
     }
 
     /// The name a connection gets until one is typed: the host's, or New server.

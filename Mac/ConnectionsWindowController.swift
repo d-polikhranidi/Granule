@@ -2,6 +2,7 @@ import AppKit
 import ClickHouseCore
 import ClickHouseSSH
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The servers the user added: a sidebar of them and the selected one's form
 /// (a URL pasted fills it in). Connect connects, then opens a window of queries
@@ -256,6 +257,42 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         menu.addItem(item(String(localized: "Copy URL"), #selector(copyURL(_:))))
         menu.addItem(.separator())
         menu.addItem(item(String(localized: "Delete…"), #selector(deleteSelected(_:))))
+    }
+
+    /// File > Import from clickhouse-client…: its configuration (`~/.clickhouse-client/config.xml`
+    /// or `config.yaml`, chosen in an open panel: the sandbox reads only what's chosen), its
+    /// connections added to the list.
+    @objc func importFromClient(_ sender: Any?) {
+        guard let window else { return }
+        save()
+        let panel = NSOpenPanel()
+        panel.message = String(localized: "Choose clickhouse-client's configuration: config.xml or config.yaml, in .clickhouse-client in your home folder.")
+        panel.prompt = String(localized: "Import")
+        panel.showsHiddenFiles = true
+        panel.allowedContentTypes = [.xml, .yaml]
+        if let home = getpwuid(getuid())?.pointee.pw_dir {
+            panel.directoryURL = URL(fileURLWithPath: String(cString: home)).appending(path: ".clickhouse-client")
+        }
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let url = panel.url else { return }
+            self?.importConnections(from: url)
+        }
+    }
+
+    func importConnections(from url: URL) {
+        let found = (try? Data(contentsOf: url)).map(CHClientConfig.connections(in:)) ?? []
+        let (added, skipped) = Connections.shared.add(found)
+        reloadList()
+        if let first = added.first { select(first.id) }
+        let summary = Connections.importSummary(of: found, added: added, skipped: skipped)
+        #if DEBUG
+        FileHandle.standardError.write(Data("VIEWER-IMPORT found \(found.count) added \(added.map(\.name)) skipped \(skipped)\n".utf8))
+        #endif
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = summary.title
+        alert.informativeText = summary.detail
+        alert.beginSheetModal(for: window)
     }
 
     @objc func addConnection(_ sender: Any?) {

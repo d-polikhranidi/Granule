@@ -37,6 +37,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             controller.connect()
             return
         }
+        #if DEBUG
+        // `-ViewerImport <file>`: clickhouse-client's configuration imported (into the checks' own list).
+        if let path = UserDefaults.standard.string(forKey: "ViewerImport") {
+            showConnections(nil)
+            connections?.importConnections(from: URL(fileURLWithPath: path))
+            return
+        }
+        #endif
         // `-ViewerConnect <name>`: that saved connection's window at launch.
         if let name = UserDefaults.standard.string(forKey: "ViewerConnect"),
            let endpoint = Connections.shared.endpoints.first(where: { $0.title == name || $0.name == name }) {
@@ -74,6 +82,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settings == nil { settings = SettingsWindowController() }
         settings?.showWindow(sender)
         settings?.window?.makeKeyAndOrderFront(sender)
+    }
+
+    /// File > Import from clickhouse-client…: in the connections window.
+    @objc func importConnections(_ sender: Any?) {
+        showConnections(sender)
+        connections?.importFromClient(sender)
     }
 
     /// The connections window with a new connection in its form.
@@ -142,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
         submenu(String(localized: "File"), [
             item(String(localized: "New Connection…"), #selector(newConnection(_:)), "n"),
+            item(String(localized: "Import from clickhouse-client…"), #selector(importConnections(_:)), ""),
             item(String(localized: "Connections…"), #selector(showConnections(_:)), "n", [.command, .shift]),
             item(String(localized: "New Tab"), #selector(NSResponder.newWindowForTab(_:)), "t"),
             .separator(),

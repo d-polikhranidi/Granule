@@ -294,7 +294,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                 if let sql = UserDefaults.standard.string(forKey: "ViewerRun") {
                     editor.text = sql
                     SQLHighlighting.apply(to: editor.textStorage)
-                    run(sql)
+                    // `-ViewerRunAll YES`: its statements run one after another (Run All Statements).
+                    if UserDefaults.standard.bool(forKey: "ViewerRunAll") { runAllStatements() } else { run(sql) }
                     // `-ViewerSaveAs <name>` (with `-ViewerSavedQueries <file>`): it saved by that name.
                     if let name = UserDefaults.standard.string(forKey: "ViewerSaveAs") { SavedQueries.shared.save(sql, as: name) }
                 }
@@ -321,6 +322,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     // The menu bar's commands (`AppDelegate.buildMenu`): they reach this screen through the responder chain.
     @objc func runCommand(_ sender: Any?) { runStatement() }
+    @objc func runAllCommand(_ sender: Any?) { runAllStatements() }
     @objc func stopCommand(_ sender: Any?) { queries.cancel() }
     @objc func checkCommand(_ sender: Any?) { checker.checkNow(text: editor.text, cursor: editor.selectedRange.location) }
     @objc func formatCommand(_ sender: Any?) { formatStatement() }
@@ -416,6 +418,43 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         confirmProduction(sql) { [weak self] in self?.askAndStart(sql) }
     }
 
+    /// Run All Statements (⇧⌘↩): the selection's statements, or the editor's, one after another
+    /// in this tab's session; the last one's rows shown, the first that fails stops them (selected).
+    private func runAllStatements() {
+        let text = editor.text as NSString
+        let selection = editor.selectedRange
+        let base = selection.length > 0 ? selection : NSRange(location: 0, length: text.length)
+        let ranges = CHSQL.statements(text.substring(with: base)).map { NSRange(location: $0.location + base.location, length: $0.length) }
+        guard !ranges.isEmpty else { return }
+        let statements = ranges.map { text.substring(with: $0) }
+        scriptRanges = ranges
+        scriptText = editor.text
+        editor.resignFirstResponder()
+        confirmProduction(queries.productionQuestion(forScript: statements)) { [weak self] in
+            guard let self else { return }
+            var seen = Set<String>()
+            let parameters = statements.flatMap(CHSQL.parameters(of:)).filter { seen.insert($0.name).inserted }
+            askForValues(of: parameters) { [weak self] values in
+                self?.begin { $0.runScript(statements, parameters: values) }
+            }
+        }
+    }
+
+    /// The editor's ranges of the script running, and its text then (typed over: not shown).
+    private var scriptRanges: [NSRange] = []
+    private var scriptText = ""
+
+    /// The statement a script stopped at, selected in the editor.
+    private func showScriptFailure() {
+        guard let index = queries.scriptFailure, editor.text == scriptText, index < scriptRanges.count else { return }
+        // (A text view shows its selection only while it's being edited: the statement is the one to fix.)
+        editor.becomeFirstResponder()
+        editor.selectedRange = scriptRanges[index]
+        editor.scrollRangeToVisible(scriptRanges[index])
+        // Once: the cursor is the user's again.
+        scriptRanges = []
+    }
+
     /// An alert over whatever this window shows (the search's presentation included).
     private func presentOnTop(_ controller: UIViewController) {
         var top: UIViewController = self
@@ -426,7 +465,11 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     /// Before a statement that drops, deletes or rewrites data on a production server that
     /// isn't read only: its name typed.
     private func confirmProduction(_ sql: String, then run: @escaping () -> Void) {
-        guard let question = queries.productionQuestion(for: sql) else { return run() }
+        confirmProduction(queries.productionQuestion(for: sql), then: run)
+    }
+
+    private func confirmProduction(_ question: (title: String, detail: String, name: String)?, then run: @escaping () -> Void) {
+        guard let question else { return run() }
         let alert = UIAlertController(title: question.title, message: question.detail, preferredStyle: .alert)
         let runAction = UIAlertAction(title: String(localized: "Run"), style: .destructive) { _ in run() }
         runAction.isEnabled = false
@@ -468,8 +511,12 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     }
 
     private func askAndStart(_ sql: String) {
-        let parameters = CHSQL.parameters(of: sql)
-        guard !parameters.isEmpty else { return start(sql, values: [:]) }
+        askForValues(of: CHSQL.parameters(of: sql)) { [weak self] values in self?.start(sql, values: values) }
+    }
+
+    /// The parameters' values asked (those given last offered), then handed on.
+    private func askForValues(of parameters: [CHSQL.Parameter], then go: @escaping ([String: String]) -> Void) {
+        guard !parameters.isEmpty else { return go([:]) }
         let alert = UIAlertController(title: String(localized: "Values of the parameters"),
                                       message: String(localized: "As text, as the server reads them."), preferredStyle: .alert)
         for parameter in parameters {
@@ -486,16 +533,21 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             var values: [String: String] = [:]
             for (parameter, field) in zip(parameters, fields) { values[parameter.name] = field.text ?? "" }
             parameterValues.merge(values) { $1 }
-            start(sql, values: values)
+            go(values)
         })
         present(alert, animated: true)
     }
 
     private func start(_ sql: String, values: [String: String]) {
+        begin { $0.run(sql, parameters: values) }
+    }
+
+    /// Something run in the result (a statement, a script), its status followed.
+    private func begin(_ run: (QueryController) -> Void) {
         detailsBar.isHidden = true
         detailsTable = nil
         messageLabel.isHidden = true
-        queries.run(sql, parameters: values)
+        run(queries)
         statusTimer?.invalidate()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateStatus() }
@@ -634,7 +686,10 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         updateChart()
         statusLabel.textColor = .secondaryLabel
         statusLabel.text = queries.status
-        if let error = queries.error { show(error) }
+        if let error = queries.error {
+            show(error)
+            showScriptFailure()
+        }
         if !queries.isRunning {
             statusTimer?.invalidate()
             statusTimer = nil
@@ -791,6 +846,9 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             UIAction(title: String(localized: "Larger Editor"), image: UIImage(systemName: "arrow.down.to.line")) { [weak self] _ in self?.resizeEditor(by: 120) },
             UIAction(title: String(localized: "Smaller Editor"), image: UIImage(systemName: "arrow.up.to.line")) { [weak self] _ in self?.resizeEditor(by: -120) },
         ])
+        let runAll = UIAction(title: String(localized: "Run All Statements"), image: UIImage(systemName: "play.square.stack")) { [weak self] _ in
+            self?.runAllStatements()
+        }
         let format = UIAction(title: String(localized: "Format Statement"), image: UIImage(systemName: "text.alignleft")) { [weak self] _ in
             self?.formatStatement()
         }
@@ -815,7 +873,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             guard let self else { return }
             AppDelegate.presentSettings(from: self)
         }
-        return [chartAction, historyMenu, save, check, format, details, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize, settings]
+        return [chartAction, historyMenu, save, runAll, check, format, details, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize, settings]
     }
 
     /// Format Statement: the selection, or the statement at the cursor, laid out by the server's

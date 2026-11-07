@@ -168,6 +168,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         }
 
         queries.confirmStoppingWrite = { [weak self] proceed in self?.askToStopWrite(then: proceed) }
+        queries.onScriptStep = { [weak self] index in self?.showScriptStatement(index, selecting: false) }
         queries.onChange = { [weak self] in
             self?.updateStatus()
             self?.updateInspector()
@@ -467,7 +468,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 }
                 if let sql = UserDefaults.standard.string(forKey: "ViewerRun") {
                     editor.string = sql
-                    run(sql)
+                    // `-ViewerRunAll YES`: its statements run one after another (Run All Statements).
+                    if UserDefaults.standard.bool(forKey: "ViewerRunAll") { runAllStatements(nil) } else { run(sql) }
                 }
                 // `-ViewerSaveAs <name>`: the `-ViewerRun` statement saved by that name (with
                 // `-ViewerSavedQueries <file>`, in a list of the check's own); `-ViewerLibrary saved|history`: the sheet.
@@ -545,7 +547,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     /// Before a statement that drops, deletes or rewrites data on a production server that
     /// isn't read only: its name typed, as GitHub asks before deleting a repository.
     private func confirmProduction(_ sql: String, then run: @escaping () -> Void) {
-        guard let question = queries.productionQuestion(for: sql) else { return run() }
+        confirmProduction(queries.productionQuestion(for: sql), then: run)
+    }
+
+    private func confirmProduction(_ question: (title: String, detail: String, name: String)?, then run: @escaping () -> Void) {
+        guard let question else { return run() }
         // Without a window to ask in, nothing runs.
         guard let window else { return }
         let alert = NSAlert()
@@ -601,6 +607,44 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             guard response == .alertFirstButtonReturn else { return }
             self?.queries.kill(plan)
         }
+    }
+
+    /// Query > Run All Statements (⇧⌘↩): the selection's statements, or the editor's, one after
+    /// another in this tab's session; the last one's rows shown, the first that fails stops them.
+    @objc func runAllStatements(_ sender: Any?) {
+        let text = editor.string as NSString
+        let selection = editor.selectedRange()
+        let base = selection.length > 0 ? selection : NSRange(location: 0, length: text.length)
+        let ranges = CHSQL.statements(text.substring(with: base)).map { NSRange(location: $0.location + base.location, length: $0.length) }
+        guard !ranges.isEmpty else { return }
+        let statements = ranges.map { text.substring(with: $0) }
+        scriptRanges = ranges
+        scriptText = editor.string
+        confirmProduction(queries.productionQuestion(forScript: statements)) { [weak self] in
+            guard let self else { return }
+            var seen = Set<String>()
+            let parameters = statements.flatMap(CHSQL.parameters(of:)).filter { seen.insert($0.name).inserted }
+            let go: ([String: String]) -> Void = { [weak self] values in
+                guard let self else { return }
+                hideDetails()
+                messageLabel.isHidden = true
+                queries.runScript(statements, parameters: values)
+                startStatusTimer()
+            }
+            if parameters.isEmpty { go([:]) } else { askForValues(of: parameters, then: go) }
+        }
+    }
+
+    /// The editor's ranges of the script running, and its text then (typed over: not shown).
+    private var scriptRanges: [NSRange] = []
+    private var scriptText = ""
+
+    /// The script's statement running, or the one it stopped at, shown in the editor.
+    private func showScriptStatement(_ index: Int, selecting: Bool) {
+        guard editor.string == scriptText, index < scriptRanges.count else { return }
+        if selecting { editor.setSelectedRange(scriptRanges[index]) }
+        editor.scrollRangeToVisible(scriptRanges[index])
+        editor.showFindIndicator(for: scriptRanges[index])
     }
 
     private func start(_ sql: String, values: [String: String]) {
@@ -859,6 +903,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         updateActivity()
         if let error = queries.error {
             show(error)
+            if let failed = queries.scriptFailure {
+                showScriptStatement(failed, selecting: true)
+                // Once: the cursor is the user's again.
+                scriptRanges = []
+            }
         }
         if !queries.isRunning {
             statusTimer?.invalidate()

@@ -3,6 +3,18 @@ import Foundation
 import Testing
 
 @Suite struct CHLocalCheckTests {
+    @Test func createdTablesAreNamed() {
+        #expect(CHSQL.createdName(of: "CREATE TEMPORARY TABLE t (x UInt32) ENGINE = Memory") == "t")
+        #expect(CHSQL.createdName(of: "-- a copy\ncreate table if not exists db.`my t` AS other") == "my t")
+        #expect(CHSQL.createdName(of: "CREATE OR REPLACE VIEW v AS SELECT 1") == "v")
+        #expect(CHSQL.createdName(of: "CREATE MATERIALIZED VIEW db.mv TO t AS SELECT 1") == "mv")
+        #expect(CHSQL.createdName(of: "CREATE DICTIONARY d (k UInt64) PRIMARY KEY k SOURCE(NULL()) LAYOUT(FLAT()) LIFETIME(0)") == "d")
+        #expect(CHSQL.createdName(of: "CREATE DATABASE d") == nil)
+        #expect(CHSQL.createdName(of: "CREATE USER u") == nil)
+        #expect(CHSQL.createdName(of: "SELECT * FROM t") == nil)
+        #expect(CHSQL.createdName(of: "CREATE TABLE") == nil)
+    }
+
     @Test func destructiveStatementsAreKnown() {
         for sql in ["DROP TABLE t", "  truncate table t", "DELETE FROM t WHERE 1", "ALTER TABLE t DELETE WHERE 1",
                     "-- why\nALTER TABLE t UPDATE x = 1 WHERE 1", "DETACH TABLE t", "RENAME TABLE a TO b", "EXCHANGE TABLES a AND b",

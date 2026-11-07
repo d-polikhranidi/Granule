@@ -162,6 +162,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ])
         submenu(String(localized: "Query"), [
             item(String(localized: "Run Statement"), #selector(QueryWindowController.runStatement(_:)), "\r"),
+            item(String(localized: "Run All Statements"), #selector(QueryWindowController.runAllStatements(_:)), "\r", [.command, .shift]),
             item(String(localized: "Stop"), #selector(QueryWindowController.stopQuery(_:)), "."),
             item(String(localized: "Check Statement"), #selector(QueryWindowController.checkStatement(_:)), "b"),
             item(String(localized: "Format Statement"), #selector(QueryWindowController.formatStatement(_:)), "f", [.control, .shift]),

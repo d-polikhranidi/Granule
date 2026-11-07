@@ -106,11 +106,20 @@ final class StatementChecker {
     }
 
     /// The problems: the text's own, and the server's verdicts on its statements where they are now.
+    /// A table the server doesn't know isn't one when a statement before it creates it (a script's
+    /// temporary table): the server checks each statement alone.
     private func publish() {
         var server: [EditorProblem] = []
+        var created = Set<String>()
         for range in CHSQL.statements(text) {
-            guard let verdict = verdicts[(text as NSString).substring(with: range)] else { continue }
-            server += verdict.map { problem in
+            let statement = (text as NSString).substring(with: range)
+            defer { if let name = CHSQL.createdName(of: statement) { created.insert(name) } }
+            guard let verdict = verdicts[statement] else { continue }
+            server += verdict.filter { problem in
+                guard !created.isEmpty, let name = problem.range.map((statement as NSString).substring(with:)),
+                      problem.message.localizedCaseInsensitiveContains("table") else { return true }
+                return !created.contains(name.trimmingCharacters(in: CharacterSet(charactersIn: "`\"")))
+            }.map { problem in
                 EditorProblem(range: problem.range.map { NSRange(location: $0.location + range.location, length: $0.length) },
                               message: problem.message, suggestions: problem.suggestions, isError: problem.severity == .error,
                               isFromServer: true, statement: range)

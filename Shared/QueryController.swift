@@ -112,6 +112,7 @@ final class QueryController {
             cancel()
             view = nil
             isViewersOwn = false
+            scriptStep = nil
             start(sql, parameters: parameters, refresh: false)
         }
     }
@@ -126,8 +127,81 @@ final class QueryController {
             cancel()
             view = nil
             isViewersOwn = true
+            scriptStep = nil
             start(sql, parameters: [:], refresh: false)
         }
+    }
+
+    // MARK: Scripts
+
+    /// The script run last: its statement running (or the one it stopped at), of how many.
+    private(set) var scriptStep: (index: Int, count: Int)?
+    /// The statement a script stopped at (its index), when one failed.
+    var scriptFailure: Int? {
+        if case .failed = state, let scriptStep { scriptStep.index } else { nil }
+    }
+    /// Called as each statement of a script starts (its index), for the editor to show it.
+    var onScriptStep: (Int) -> Void = { _ in }
+
+    /// Runs a script's statements one after another in the tab's session (SET, USE and
+    /// temporary tables carry on): each but the last for its effect (a query's rows thrown
+    /// away), the last shown as a result. The first that fails stops the rest; Stop kills
+    /// the one running on the server too.
+    func runScript(_ statements: [String], parameters: [String: String] = [:]) {
+        guard statements.count > 1 else {
+            if let only = statements.first { run(only, parameters: parameters) }
+            return
+        }
+        whenWriteMayStop { [weak self] in
+            guard let self else { return }
+            cancel()
+            view = nil
+            isViewersOwn = false
+            let client = client, sessionID = sessionID
+            running = Task { [weak self] in
+                for (index, statement) in statements.dropLast().enumerated() {
+                    guard let self, !Task.isCancelled else { return }
+                    stepScript(index, of: statements.count, statement)
+                    let id = UUID().uuidString
+                    let thrownAway = CHSQL.kind(of: statement) == .read && CHSQL.formatClause(of: statement) == nil
+                        ? statement + "\nFORMAT Null" : statement
+                    do {
+                        _ = try await client.plainText(thrownAway, queryID: id, sessionID: sessionID, parameters: parameters)
+                    } catch {
+                        if Task.isCancelled {
+                            // Closing the connection doesn't stop a statement that writes.
+                            Task { try? await client.kill(queryID: id) }
+                            return
+                        }
+                        state = .failed(error)
+                        onChange()
+                        return
+                    }
+                }
+                guard let self, !Task.isCancelled else { return }
+                stepScript(statements.count - 1, of: statements.count, statements[statements.count - 1])
+                start(statements[statements.count - 1], parameters: parameters, refresh: false)
+            }
+        }
+    }
+
+    private func stepScript(_ index: Int, of count: Int, _ statement: String) {
+        scriptStep = (index, count)
+        self.statement = statement
+        state = .running(started: .now)
+        onScriptStep(index)
+        onChange()
+    }
+
+    /// The production question for a script: its first statement that drops, deletes or
+    /// rewrites data, and how many more do.
+    func productionQuestion(forScript statements: [String]) -> (title: String, detail: String, name: String)? {
+        let destructive = statements.filter(CHSQL.isDestructive)
+        guard let first = destructive.first, var question = productionQuestion(for: first) else { return nil }
+        if destructive.count > 1 {
+            question.detail += "\n\n" + String(localized: "The script has \(destructive.count - 1) more statements like it.")
+        }
+        return question
     }
 
     /// Whether the statement shown is the user's (not a server view or the viewer's own).
@@ -171,6 +245,8 @@ final class QueryController {
             guard let self else { return }
             cancel()
             self.view = view
+            isViewersOwn = false
+            scriptStep = nil
             start(view.sql(cluster: cluster), parameters: [:], refresh: false)
         }
     }
@@ -247,7 +323,7 @@ final class QueryController {
 
     private func runForText(_ sql: String, parameters: [String: String]) async {
         do {
-            let text = try await client.plainText(sql, sessionID: sessionID)
+            let text = try await client.plainText(sql, sessionID: sessionID, parameters: parameters)
             guard !Task.isCancelled else { return }
             onText(text)
             state = .finished(CHQueryStats(queryID: "", rows: 0, receivedBytes: text.utf8.count, resultBytes: 0, firstRows: nil,
@@ -654,9 +730,20 @@ final class QueryController {
                 parts.append(String(localized: "server: \(server.duration.formatted(.number.precision(.fractionLength(3)))) s, read \(read) rows, \(Self.bytes(server.readBytes)), \(Self.bytes(server.memory)) memory"))
             }
         case .failed:
-            parts.append(rows > 0 ? String(localized: "Failed after \(rows.formatted()) rows") : String(localized: "Failed"))
+            if let scriptFailure, let scriptStep {
+                parts.append(String(localized: "Statement \(scriptFailure + 1) of \(scriptStep.count) failed"))
+            } else {
+                parts.append(rows > 0 ? String(localized: "Failed after \(rows.formatted()) rows") : String(localized: "Failed"))
+            }
         case .cancelled:
-            parts.append(String(localized: "Cancelled after \(rows.formatted()) rows"))
+            if let scriptStep, scriptStep.index < scriptStep.count - 1 {
+                parts.append(String(localized: "Stopped at statement \(scriptStep.index + 1) of \(scriptStep.count)"))
+            } else {
+                parts.append(String(localized: "Cancelled after \(rows.formatted()) rows"))
+            }
+        }
+        if let scriptStep, isRunning {
+            parts.insert(String(localized: "Statement \(scriptStep.index + 1) of \(scriptStep.count)"), at: 0)
         }
         if table.isSortingRows { parts.append(String(localized: "Sorting…")) }
         if table.isSearchingRows, searchText.isEmpty || !isFinished { parts.append(String(localized: "Searching…")) }

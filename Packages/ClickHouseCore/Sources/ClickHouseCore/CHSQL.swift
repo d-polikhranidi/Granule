@@ -155,6 +155,27 @@ public enum CHSQL {
         return first == "SYSTEM" && words.count >= 3 && words[1] == "DROP" && words.contains("REPLICA")
     }
 
+    /// The table, view or dictionary a CREATE statement makes (its name, without its database
+    /// or quotes), `nil` for other statements: a script's later statements use what it makes.
+    public static func createdName(of statement: String) -> String? {
+        let text = statement as NSString
+        let words = tokens(statement).filter { $0.kind != .whitespace && $0.kind != .comment }
+        func word(_ index: Int) -> String { index < words.count ? text.substring(with: words[index].range) : "" }
+        guard word(0).uppercased() == "CREATE" else { return nil }
+        var index = 1
+        while !["TABLE", "VIEW", "DICTIONARY"].contains(word(index).uppercased()) {
+            // A database, a user, a function: no table.
+            guard ["OR", "REPLACE", "TEMPORARY", "MATERIALIZED"].contains(word(index).uppercased()) else { return nil }
+            index += 1
+        }
+        index += 1
+        if word(index).uppercased() == "IF" { index += 3 }
+        if word(index + 1) == "." { index += 2 }
+        guard index < words.count, [.identifier, .keyword, .quotedIdentifier].contains(words[index].kind) else { return nil }
+        let name = word(index)
+        return words[index].kind == .quotedIdentifier ? String(name.dropFirst().dropLast()) : name
+    }
+
     /// A statement's first word, upper-cased (comments and brackets before it skipped).
     private static func firstWord(of statement: String) -> String? {
         leadingWords(of: statement, count: 1).first

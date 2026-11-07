@@ -390,6 +390,56 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     }
 
     private func run(_ sql: String) {
+        confirmRun(sql) { [weak self] in self?.askAndStart(sql) }
+    }
+
+    /// Asks first when running would stop a statement that changes data halfway, and
+    /// before a statement that drops, deletes or rewrites data on a production server
+    /// that isn't read only (its name typed).
+    private func confirmRun(_ sql: String, then run: @escaping () -> Void) {
+        guard queries.isRunningWrite else { return confirmProduction(sql, then: run) }
+        let alert = UIAlertController(title: String(localized: "A statement that changes data is still running"),
+                                      message: String(localized: "Running another one stops it, and what it already changed stays changed."),
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "Stop It and Run"), style: .destructive) { [weak self] _ in
+            self?.confirmProduction(sql, then: run)
+        })
+        present(alert, animated: true)
+    }
+
+    private func confirmProduction(_ sql: String, then run: @escaping () -> Void) {
+        guard endpoint.environment == .production, !endpoint.isReadOnly, CHSQL.isDestructive(sql) else { return run() }
+        let name = endpoint.title
+        let firstLine = sql.split(whereSeparator: \.isNewline).first.map(String.init) ?? sql
+        let alert = UIAlertController(title: String(localized: "Change data on the production server?"),
+                                      message: String(localized: "This drops, deletes or rewrites data on \(name):\n\n\(firstLine.count > 120 ? String(firstLine.prefix(120)) + "…" : firstLine)\n\nType the connection's name to run it."),
+                                      preferredStyle: .alert)
+        let runAction = UIAlertAction(title: String(localized: "Run"), style: .destructive) { _ in run() }
+        runAction.isEnabled = false
+        alert.addTextField { field in
+            field.placeholder = name
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+            field.addAction(UIAction { [weak field] _ in
+                runAction.isEnabled = field?.text?.trimmingCharacters(in: .whitespaces) == name
+            }, for: .editingChanged)
+        }
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        alert.addAction(runAction)
+        present(alert, animated: true)
+    }
+
+    /// Kill on rows: asked first (what a killed mutation leaves, across a cluster or not).
+    private func confirmKill(_ rows: IndexSet) {
+        let question = queries.killQuestion(rows: rows.count)
+        let alert = UIAlertController(title: question.title, message: question.detail, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "Kill"), style: .destructive) { [weak self] _ in self?.queries.kill(rows: rows) })
+        present(alert, animated: true)
+    }
+
+    private func askAndStart(_ sql: String) {
         let parameters = CHSQL.parameters(of: sql)
         guard !parameters.isEmpty else { return start(sql, values: [:]) }
         let alert = UIAlertController(title: String(localized: "Values of the parameters"),
@@ -767,8 +817,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                 UIPasteboard.general.string = tableView.copyText(forRows: rows)
             })
             if let title = queries.killTitle {
-                items.append(UIAction(title: rows.count == 1 ? title : "\(title) (\(rows.count.formatted()))", image: UIImage(systemName: "xmark.octagon"),
-                                      attributes: .destructive) { [weak self] _ in self?.queries.kill(rows: rows) })
+                items.append(UIAction(title: rows.count == 1 ? title + "…" : "\(title) (\(rows.count.formatted()))…", image: UIImage(systemName: "xmark.octagon"),
+                                      attributes: .destructive) { [weak self] _ in self?.confirmKill(rows) })
             }
         }
         return UIMenu(children: items)

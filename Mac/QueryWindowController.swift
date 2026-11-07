@@ -523,9 +523,72 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     }
 
     private func run(_ sql: String) {
-        let parameters = CHSQL.parameters(of: sql)
-        guard !parameters.isEmpty else { return start(sql, values: [:]) }
-        askForValues(of: parameters) { [weak self] values in self?.start(sql, values: values) }
+        confirmRun(sql) { [weak self] in
+            guard let self else { return }
+            let parameters = CHSQL.parameters(of: sql)
+            guard !parameters.isEmpty else { return start(sql, values: [:]) }
+            askForValues(of: parameters) { [weak self] values in self?.start(sql, values: values) }
+        }
+    }
+
+    /// Asks first when running would stop a statement that changes data halfway, and
+    /// before a statement that drops, deletes or rewrites data on a production server
+    /// that isn't read only (its name typed, as GitHub asks before deleting a repository).
+    private func confirmRun(_ sql: String, then run: @escaping () -> Void) {
+        guard let window else { return run() }
+        guard queries.isRunningWrite else { return confirmProduction(sql, then: run) }
+        let alert = NSAlert()
+        alert.messageText = String(localized: "A statement that changes data is still running")
+        alert.informativeText = String(localized: "Running another one stops it, and what it already changed stays changed. Wait for it, or run this one in a new tab (⌘T).")
+        alert.addButton(withTitle: String(localized: "Stop It and Run"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.buttons[0].hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.confirmProduction(sql, then: run)
+        }
+    }
+
+    private func confirmProduction(_ sql: String, then run: @escaping () -> Void) {
+        guard let window, endpoint.environment == .production, !endpoint.isReadOnly, CHSQL.isDestructive(sql) else { return run() }
+        let name = endpoint.title
+        let firstLine = sql.split(whereSeparator: \.isNewline).first.map(String.init) ?? sql
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = String(localized: "Change data on the production server?")
+        alert.informativeText = String(localized: "This drops, deletes or rewrites data on \(name):\n\n\(firstLine.count > 120 ? String(firstLine.prefix(120)) + "…" : firstLine)\n\nType the connection's name to run it.")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = name
+        alert.accessoryView = field
+        alert.addButton(withTitle: String(localized: "Run"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        let runButton = alert.buttons[0]
+        runButton.hasDestructiveAction = true
+        runButton.isEnabled = false
+        let watcher = TextWatcher { text in runButton.isEnabled = text.trimmingCharacters(in: .whitespaces) == name }
+        field.delegate = watcher
+        alert.window.initialFirstResponder = field
+        alert.beginSheetModal(for: window) { response in
+            withExtendedLifetime(watcher) {}
+            guard response == .alertFirstButtonReturn, field.stringValue.trimmingCharacters(in: .whitespaces) == name else { return }
+            run()
+        }
+    }
+
+    /// Kill on rows: asked first (what a killed mutation leaves, across a cluster or not).
+    private func confirmKill(_ rows: IndexSet) {
+        guard let window else { return }
+        let question = queries.killQuestion(rows: rows.count)
+        let alert = NSAlert()
+        alert.messageText = question.title
+        alert.informativeText = question.detail
+        alert.addButton(withTitle: String(localized: "Kill"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.buttons[0].hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.queries.kill(rows: rows)
+        }
     }
 
     private func start(_ sql: String, values: [String: String]) {
@@ -963,8 +1026,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             }.item)
             if let title = queries.killTitle {
                 menu.addItem(.separator())
-                menu.addItem(MenuAction(rows.count == 1 ? title : "\(title) (\(rows.count.formatted()))") { [weak self] in
-                    self?.queries.kill(rows: rows)
+                menu.addItem(MenuAction(rows.count == 1 ? title + "…" : "\(title) (\(rows.count.formatted()))…") { [weak self] in
+                    self?.confirmKill(rows)
                 }.item)
             }
         }
@@ -1097,6 +1160,18 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     }
 
     /// Keeps the save panel's extension in step with the chosen format.
+    /// Calls back as a field's text changes (the production question's Run button).
+    private final class TextWatcher: NSObject, NSTextFieldDelegate {
+        let changed: (String) -> Void
+
+        init(_ changed: @escaping (String) -> Void) { self.changed = changed }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            changed(field.stringValue)
+        }
+    }
+
     private final class FormatChooser: NSObject {
         let panel: NSSavePanel
         let formats: [String]

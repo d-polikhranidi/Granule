@@ -3,6 +3,18 @@ import Foundation
 import Testing
 
 @Suite struct CHLocalCheckTests {
+    @Test func destructiveStatementsAreKnown() {
+        for sql in ["DROP TABLE t", "  truncate table t", "DELETE FROM t WHERE 1", "ALTER TABLE t DELETE WHERE 1",
+                    "-- why\nALTER TABLE t UPDATE x = 1 WHERE 1", "DETACH TABLE t", "RENAME TABLE a TO b", "EXCHANGE TABLES a AND b",
+                    "KILL QUERY WHERE 1", "/* c */ drop database d"] {
+            #expect(CHSQL.isDestructive(sql), "\(sql)")
+        }
+        for sql in ["SELECT 1", "INSERT INTO t VALUES (1)", "CREATE TABLE t (x UInt8) ENGINE = Memory", "WITH 1 AS x SELECT x",
+                    "SET max_threads = 1", "SELECT 'DROP TABLE t'", "-- DROP TABLE t\nSELECT 1", ""] {
+            #expect(!CHSQL.isDestructive(sql), "\(sql)")
+        }
+    }
+
     private func messages(_ statement: String) -> [String] {
         CHSQL.localProblems(in: statement).map { "\(($0.range.map { (statement as NSString).substring(with: $0) }) ?? "-")|\($0.message)" }
     }

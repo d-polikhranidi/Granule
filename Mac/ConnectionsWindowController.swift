@@ -644,6 +644,11 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         NSApp.windows.filter { $0.windowController is QueryWindowController }.forEach { $0.close() }
         try? await Task.sleep(for: .seconds(1))
         check("it came back when the server's window closed", window.isVisible)
+        form.isReadOnly = false
+        form.setEnvironment(.staging)
+        let stagingLeftItAlone = !form.isReadOnly
+        form.setEnvironment(.production)
+        check("Production turns Read only on, other environments don't", stagingLeftItAlone && form.isReadOnly)
         list.deselectAll(nil)
         try? await Task.sleep(for: .milliseconds(300))
         check("no connection selected: the hint in the form's place", form.id == nil)
@@ -701,6 +706,13 @@ final class ConnectionForm {
     var url = ""
     var name = ""
     var environment: CHEnvironment?
+
+    /// Production turns Read only on (it can be turned off again): nothing is
+    /// changed there by accident, as the research's clients that write learned.
+    func setEnvironment(_ environment: CHEnvironment?) {
+        if environment == .production, self.environment != .production { isReadOnly = true }
+        self.environment = environment
+    }
     var isReadOnly = false
     var host = ""
     var port = ""
@@ -829,7 +841,7 @@ struct ConnectionFormView: View {
                     }
                     Section {
                         TextField("Name", text: $form.name, prompt: Text(form.namePrompt))
-                        Picker("Environment", selection: $form.environment) {
+                        Picker("Environment", selection: Binding(get: { form.environment }, set: { form.setEnvironment($0) })) {
                             // The picker's bezel leaves more room before an icon (15 pt) than after its chevrons
                             // (9 pt): the labels give 6 back, so both sides are even.
                             Label {

@@ -196,6 +196,8 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
         }
         environmentButton.menu = UIMenu(children: [none] + CHEnvironment.allCases.map { item in
             UIAction(title: item.title, image: dot(item), state: environment == item ? .on : .off) { [weak self] _ in
+                // Production turns Read only on (it can be turned off again).
+                if item == .production, self?.environment != .production { self?.readOnlySwitch.setOn(true, animated: true) }
                 self?.environment = item
                 self?.showEnvironment()
             }

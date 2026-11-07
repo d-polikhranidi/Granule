@@ -68,6 +68,26 @@ final class QueryController {
         return false
     }
 
+    /// A statement of the user's that changes data is running: another Run would stop it halfway.
+    var isRunningWrite: Bool {
+        isRunning && view == nil && statement.map { CHSQL.kind(of: $0) == .other } == true
+    }
+
+    /// What Kill would stop, for its question: mutations (which keep what they changed) or queries.
+    var killsMutations: Bool { view == .mutations }
+
+    /// The question before killing rows, and what it means.
+    func killQuestion(rows count: Int) -> (title: String, detail: String) {
+        let title = killsMutations
+            ? (count == 1 ? String(localized: "Kill this mutation?") : String(localized: "Kill \(count.formatted()) mutations?"))
+            : (count == 1 ? String(localized: "Kill this query?") : String(localized: "Kill \(count.formatted()) queries?"))
+        var detail = killsMutations
+            ? String(localized: "A killed mutation stops where it is: the parts it already changed stay changed.")
+            : String(localized: "The query stops; what it already wrote stays written.")
+        if let cluster { detail += " " + String(localized: "On every server of the cluster \(cluster).") }
+        return (title, detail)
+    }
+
     private var isFinished: Bool {
         if case .finished = state { return true }
         return false

@@ -387,7 +387,7 @@ final class QueryController {
         return .zero
     }
 
-    private func runForRows(_ sql: String, parameters: [String: String], rewrites: Int, refresh: Bool = false) async {
+    private func runForRows(_ sql: String, parameters: [String: String], rewrites: Int, refresh: Bool = false, locked: Int = 0) async {
         var options = CHQueryOptions()
         queryID = options.queryID
         if view == nil { monitor(options.queryID) }
@@ -450,10 +450,18 @@ final class QueryController {
             statement = without
             await runForRows(without, parameters: parameters, rewrites: rewrites, refresh: refresh)
             return
-        } catch CHClientError.unsupportedType(let column, let type) where rewrites < 8 && isRead && !column.isEmpty {
+        } catch let error as CHServerError where error.code == chSessionIsLocked && locked < 20 && !shown {
+            // The session still busy with the query before (a remote server takes a while to drop
+            // one that was stopped, or failed): run again once it's free.
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            await runForRows(sql, parameters: parameters, rewrites: rewrites, refresh: refresh, locked: locked + 1)
+            return
+        } catch CHClientError.unsupportedType(let column, let type) where rewrites < 16 && isRead && !column.isEmpty {
             // Columns whose bytes can't be read: run it again once with them as their values or
             // text, all of them (the server describes the result without running it), not one a run.
-            var columns = (try? await client.unreadableColumns(of: sql, parameters: parameters, sessionID: sessionID)) ?? []
+            let database = currentDatabase ?? (client.endpoint.database.isEmpty ? nil : client.endpoint.database)
+            var columns = (try? await client.unreadableColumns(of: sql, parameters: parameters, database: database, sessionID: sessionID)) ?? []
             guard !Task.isCancelled else { return }
             if !columns.contains(where: { $0.name == column }) { columns.append((column, type)) }
             let replaced = columns.map { name, type in

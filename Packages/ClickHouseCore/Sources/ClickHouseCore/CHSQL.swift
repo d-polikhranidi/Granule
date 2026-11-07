@@ -136,12 +136,25 @@ public enum CHSQL {
     }
 
     public static func kind(of statement: String) -> Kind {
-        guard let first = tokens(statement).first(where: { $0.kind != .whitespace && $0.kind != .comment && $0.kind != .punctuation }) else {
-            return .other
-        }
-        let word = (statement as NSString).substring(with: first.range).uppercased()
+        guard let word = firstWord(of: statement) else { return .other }
         return ["SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "EXISTS", "CHECK", "VALUES", "FROM", "TABLE"].contains(word)
             ? .read : .other
+    }
+
+    /// Whether a statement destroys or rewrites what's there: DROP, TRUNCATE,
+    /// DELETE, ALTER (its mutations and its schema changes), DETACH, RENAME,
+    /// EXCHANGE, KILL. A production server's asks for its name first.
+    public static func isDestructive(_ statement: String) -> Bool {
+        guard let word = firstWord(of: statement) else { return false }
+        return ["DROP", "TRUNCATE", "DELETE", "ALTER", "DETACH", "RENAME", "EXCHANGE", "KILL"].contains(word)
+    }
+
+    /// A statement's first word, upper-cased (comments and brackets before it skipped).
+    private static func firstWord(of statement: String) -> String? {
+        guard let first = tokens(statement).first(where: { $0.kind != .whitespace && $0.kind != .comment && $0.kind != .punctuation }) else {
+            return nil
+        }
+        return (statement as NSString).substring(with: first.range).uppercased()
     }
 
     /// The format a statement's own `FORMAT` clause asks for (its last

@@ -142,19 +142,29 @@ public enum CHSQL {
     }
 
     /// Whether a statement destroys or rewrites what's there: DROP, TRUNCATE,
-    /// DELETE, ALTER (its mutations and its schema changes), DETACH, RENAME,
-    /// EXCHANGE, KILL. A production server's asks for its name first.
+    /// DELETE and UPDATE, ALTER (its mutations and its schema changes), DETACH,
+    /// RENAME, EXCHANGE, KILL, REPLACE and CREATE OR REPLACE, OPTIMIZE (FINAL,
+    /// DEDUPLICATE), RESTORE, SYSTEM DROP … REPLICA. A production server's asks
+    /// for its name first.
     public static func isDestructive(_ statement: String) -> Bool {
-        guard let word = firstWord(of: statement) else { return false }
-        return ["DROP", "TRUNCATE", "DELETE", "ALTER", "DETACH", "RENAME", "EXCHANGE", "KILL"].contains(word)
+        let words = leadingWords(of: statement, count: 4)
+        guard let first = words.first else { return false }
+        if ["DROP", "TRUNCATE", "DELETE", "UPDATE", "ALTER", "DETACH", "RENAME", "EXCHANGE", "KILL", "REPLACE", "OPTIMIZE", "RESTORE"]
+            .contains(first) { return true }
+        if first == "CREATE", words.count >= 3, words[1] == "OR", words[2] == "REPLACE" { return true }
+        return first == "SYSTEM" && words.count >= 3 && words[1] == "DROP" && words.contains("REPLICA")
     }
 
     /// A statement's first word, upper-cased (comments and brackets before it skipped).
     private static func firstWord(of statement: String) -> String? {
-        guard let first = tokens(statement).first(where: { $0.kind != .whitespace && $0.kind != .comment && $0.kind != .punctuation }) else {
-            return nil
-        }
-        return (statement as NSString).substring(with: first.range).uppercased()
+        leadingWords(of: statement, count: 1).first
+    }
+
+    /// A statement's first words, upper-cased (comments and punctuation skipped).
+    private static func leadingWords(of statement: String, count: Int) -> [String] {
+        let text = statement as NSString
+        return tokens(statement).lazy.filter { $0.kind != .whitespace && $0.kind != .comment && $0.kind != .punctuation }
+            .prefix(count).map { text.substring(with: $0.range).uppercased() }
     }
 
     /// The format a statement's own `FORMAT` clause asks for (its last

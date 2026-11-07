@@ -6,11 +6,14 @@ import Testing
     @Test func destructiveStatementsAreKnown() {
         for sql in ["DROP TABLE t", "  truncate table t", "DELETE FROM t WHERE 1", "ALTER TABLE t DELETE WHERE 1",
                     "-- why\nALTER TABLE t UPDATE x = 1 WHERE 1", "DETACH TABLE t", "RENAME TABLE a TO b", "EXCHANGE TABLES a AND b",
-                    "KILL QUERY WHERE 1", "/* c */ drop database d"] {
+                    "KILL QUERY WHERE 1", "/* c */ drop database d", "UPDATE t SET x = 0 WHERE 1", "CREATE OR REPLACE TABLE t (x UInt8) ENGINE = Memory",
+                    "REPLACE TABLE t (x UInt8) ENGINE = Memory", "OPTIMIZE TABLE t FINAL", "RESTORE TABLE t FROM Disk('b', 'x')",
+                    "SYSTEM DROP REPLICA 'r' FROM TABLE t", "SYSTEM DROP DATABASE REPLICA 'r' FROM DATABASE d"] {
             #expect(CHSQL.isDestructive(sql), "\(sql)")
         }
         for sql in ["SELECT 1", "INSERT INTO t VALUES (1)", "CREATE TABLE t (x UInt8) ENGINE = Memory", "WITH 1 AS x SELECT x",
-                    "SET max_threads = 1", "SELECT 'DROP TABLE t'", "-- DROP TABLE t\nSELECT 1", ""] {
+                    "SET max_threads = 1", "SELECT 'DROP TABLE t'", "-- DROP TABLE t\nSELECT 1", "", "SYSTEM DROP DNS CACHE",
+                    "CREATE TABLE IF NOT EXISTS t (x UInt8) ENGINE = Memory"] {
             #expect(!CHSQL.isDestructive(sql), "\(sql)")
         }
     }

@@ -66,6 +66,34 @@ struct CHServerTests {
         "'{\"a\": 1, \"b\": {\"c\": \"x\"}}'::JSON",
     ]
 
+    /// A read-only connection writes nowhere, through statements with their own FORMAT
+    /// too; reading and killing still work. (`null()` isn't a probe: readonly lets
+    /// writes into table functions through.)
+    @Test func readOnlyConnectionsWriteNowhere() async throws {
+        let writer = try await TestServer.connected()
+        let table = "viewer_readonly_\(UUID().uuidString.prefix(8).lowercased())"
+        _ = try await writer.plainText("CREATE TABLE \(table) (x UInt8) ENGINE = Memory")
+        defer { Task { _ = try? await writer.plainText("DROP TABLE IF EXISTS \(table)") } }
+        let environment = ProcessInfo.processInfo.environment
+        let url = try #require(environment["CH_TEST_URL"])
+        var (endpoint, password) = try #require(CHEndpoint.parse(url))
+        endpoint.isReadOnly = true
+        let client = CHClient(endpoint: endpoint, password: environment["CH_TEST_PASSWORD"] ?? password ?? "")
+        try await client.connect(timeout: 10)
+        for statement in ["INSERT INTO \(table) VALUES (1)", "INSERT INTO \(table) FORMAT Values (1)", "TRUNCATE TABLE \(table) FORMAT Null"] {
+            do {
+                _ = try await client.plainText(statement)
+                Issue.record("\(statement) ran on a read-only connection")
+            } catch let error as CHServerError {
+                #expect(error.code == 164, "\(statement)")
+            }
+        }
+        #expect(try await writer.plainText("SELECT count() FROM \(table) FORMAT TSV") == "0\n")
+        #expect(try await client.plainText("SELECT 1 FORMAT TSV") == "1\n")
+        _ = try await client.plainText("KILL QUERY WHERE query_id = 'viewer-no-such-query' ASYNC FORMAT Null")
+        _ = try await writer.plainText("DROP TABLE \(table)")
+    }
+
     /// The viewer's own queries carry its mark in the log; the user's don't.
     @Test func theViewersOwnQueriesAreMarked() async throws {
         let client = try await TestServer.connected()

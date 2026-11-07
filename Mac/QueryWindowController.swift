@@ -167,6 +167,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             self?.startStatusTimer()
         }
 
+        queries.confirmStoppingWrite = { [weak self] proceed in self?.askToStopWrite(then: proceed) }
         queries.onChange = { [weak self] in
             self?.updateStatus()
             self?.updateInspector()
@@ -316,9 +317,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             if height < 120 || height > split.bounds.height * 0.6 { split.setPosition(220, ofDividerAt: 0) }
         }
         applyAppearance()
-        NotificationCenter.default.addObserver(forName: AppearanceSettings.didChange, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.applyAppearance() }
-        }
+        NotificationCenter.default.addObserver(self, selector: #selector(appearanceDidChange(_:)), name: AppearanceSettings.didChange, object: nil)
         guard #available(macOS 26.0, *) else { return split }
         // Above the status accessory: the table doesn't read safe areas, so it ends where they begin.
         let container = NSView()
@@ -331,6 +330,10 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             split.bottomAnchor.constraint(equalTo: container.safeAreaLayoutGuide.bottomAnchor),
         ])
         return container
+    }
+
+    @objc private func appearanceDidChange(_ notification: Notification) {
+        applyAppearance()
     }
 
     /// Settings > Appearance on the editor and the result: the theme and sizes, dark
@@ -523,7 +526,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     }
 
     private func run(_ sql: String) {
-        confirmRun(sql) { [weak self] in
+        confirmProduction(sql) { [weak self] in
             guard let self else { return }
             let parameters = CHSQL.parameters(of: sql)
             guard !parameters.isEmpty else { return start(sql, values: [:]) }
@@ -531,54 +534,55 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         }
     }
 
-    /// Asks first when running would stop a statement that changes data halfway, and
-    /// before a statement that drops, deletes or rewrites data on a production server
-    /// that isn't read only (its name typed, as GitHub asks before deleting a repository).
-    private func confirmRun(_ sql: String, then run: @escaping () -> Void) {
-        guard let window else { return run() }
-        guard queries.isRunningWrite else { return confirmProduction(sql, then: run) }
-        let alert = NSAlert()
-        alert.messageText = String(localized: "A statement that changes data is still running")
-        alert.informativeText = String(localized: "Running another one stops it, and what it already changed stays changed. Wait for it, or run this one in a new tab (⌘T).")
-        alert.addButton(withTitle: String(localized: "Stop It and Run"))
-        alert.addButton(withTitle: String(localized: "Cancel"))
-        alert.buttons[0].hasDestructiveAction = true
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard response == .alertFirstButtonReturn else { return }
-            self?.confirmProduction(sql, then: run)
-        }
-    }
-
+    /// Before a statement that drops, deletes or rewrites data on a production server that
+    /// isn't read only: its name typed, as GitHub asks before deleting a repository.
     private func confirmProduction(_ sql: String, then run: @escaping () -> Void) {
-        guard let window, endpoint.environment == .production, !endpoint.isReadOnly, CHSQL.isDestructive(sql) else { return run() }
-        let name = endpoint.title
-        let firstLine = sql.split(whereSeparator: \.isNewline).first.map(String.init) ?? sql
+        guard let question = queries.productionQuestion(for: sql) else { return run() }
+        // Without a window to ask in, nothing runs.
+        guard let window else { return }
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = String(localized: "Change data on the production server?")
-        alert.informativeText = String(localized: "This drops, deletes or rewrites data on \(name):\n\n\(firstLine.count > 120 ? String(firstLine.prefix(120)) + "…" : firstLine)\n\nType the connection's name to run it.")
+        alert.messageText = question.title
+        alert.informativeText = question.detail
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.placeholderString = name
+        field.placeholderString = question.name
         alert.accessoryView = field
         alert.addButton(withTitle: String(localized: "Run"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         let runButton = alert.buttons[0]
         runButton.hasDestructiveAction = true
         runButton.isEnabled = false
-        let watcher = TextWatcher { text in runButton.isEnabled = text.trimmingCharacters(in: .whitespaces) == name }
+        let watcher = TextWatcher { text in runButton.isEnabled = text.trimmingCharacters(in: .whitespaces) == question.name }
         field.delegate = watcher
         alert.window.initialFirstResponder = field
         alert.beginSheetModal(for: window) { response in
             withExtendedLifetime(watcher) {}
-            guard response == .alertFirstButtonReturn, field.stringValue.trimmingCharacters(in: .whitespaces) == name else { return }
+            guard response == .alertFirstButtonReturn, field.stringValue.trimmingCharacters(in: .whitespaces) == question.name else { return }
             run()
         }
     }
 
-    /// Kill on rows: asked first (what a killed mutation leaves, across a cluster or not).
-    private func confirmKill(_ rows: IndexSet) {
+    /// Before what runs next stops a statement that changes data halfway (`QueryController`
+    /// asks for Run, server views and details alike): a killed write stays half done.
+    private func askToStopWrite(then proceed: @escaping () -> Void) {
         guard let window else { return }
-        let question = queries.killQuestion(rows: rows.count)
+        let alert = NSAlert()
+        alert.messageText = String(localized: "A statement that changes data is still running")
+        alert.informativeText = String(localized: "Going on stops it, and what it already changed stays changed. Wait for it, or open a new tab (⌘T).")
+        alert.addButton(withTitle: String(localized: "Stop It and Go On"))
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        alert.buttons[0].hasDestructiveAction = true
+        alert.beginSheetModal(for: window) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            proceed()
+        }
+    }
+
+    /// Kill on rows: asked first (what a killed mutation leaves, across a cluster or not).
+    /// The plan was read when the menu opened: a live view's rows move meanwhile.
+    private func confirmKill(_ plan: QueryController.KillPlan) {
+        guard let window else { return }
+        let question = queries.killQuestion(for: plan)
         let alert = NSAlert()
         alert.messageText = question.title
         alert.informativeText = question.detail
@@ -587,7 +591,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         alert.buttons[0].hasDestructiveAction = true
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
-            self?.queries.kill(rows: rows)
+            self?.queries.kill(plan)
         }
     }
 
@@ -1024,10 +1028,10 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(tableView.copyText(forRows: rows), forType: .string)
             }.item)
-            if let title = queries.killTitle {
+            if let title = queries.killTitle, let plan = queries.killPlan(rows: rows) {
                 menu.addItem(.separator())
                 menu.addItem(MenuAction(rows.count == 1 ? title + "…" : "\(title) (\(rows.count.formatted()))…") { [weak self] in
-                    self?.confirmKill(rows)
+                    self?.confirmKill(plan)
                 }.item)
             }
         }
@@ -1124,7 +1128,8 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     /// format it makes (CSV, TSV, Parquet, Arrow, JSON lines) into a file:
     /// all its rows, not only those kept here.
     @objc func exportResult(_ sender: Any?) {
-        guard let sql = queries.statement, CHSQL.formatClause(of: sql) == nil else { return }
+        // Export runs the statement again: a write would run twice.
+        guard queries.canExport, let sql = queries.statement else { return }
         let formats: [(title: String, format: String, ext: String)] = [
             ("CSV", "CSVWithNames", "csv"), ("TSV", "TSVWithNames", "tsv"), ("Parquet", "Parquet", "parquet"),
             ("Arrow", "Arrow", "arrow"), (String(localized: "JSON lines"), "JSONEachRow", "jsonl"),
@@ -1159,7 +1164,6 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         }
     }
 
-    /// Keeps the save panel's extension in step with the chosen format.
     /// Calls back as a field's text changes (the production question's Run button).
     private final class TextWatcher: NSObject, NSTextFieldDelegate {
         let changed: (String) -> Void
@@ -1172,6 +1176,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         }
     }
 
+    /// Keeps the save panel's extension in step with the chosen format.
     private final class FormatChooser: NSObject {
         let panel: NSSavePanel
         let formats: [String]
@@ -1259,7 +1264,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     @objc func validateToolbarItem(_ item: NSToolbarItem) -> Bool {
         switch item.itemIdentifier {
         case Self.stopItem: queries.isRunning
-        case Self.exportItem: queries.statement != nil
+        case Self.exportItem: queries.canExport
         default: true
         }
     }
@@ -1267,7 +1272,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(stopQuery(_:)): queries.isRunning
-        case #selector(exportResult(_:)): queries.statement != nil
+        case #selector(exportResult(_:)): queries.canExport
         case #selector(showValue(_:)): queries.source != nil
         case #selector(checkStatement(_:)): client.serverInfo != nil
         default: true

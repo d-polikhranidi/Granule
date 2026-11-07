@@ -5,11 +5,12 @@ import Foundation
 /// Server section. Their rows sort, search and sum like any result's; live
 /// ones refresh every two seconds; queries and mutations can be killed.
 nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
-    case processes, recentQueries, queryPatterns, failedQueries, merges, mutations, tableSizes, columnSizes, replicas,
-         replicationQueue, errors, disks, settings, metrics
+    case health, processes, recentQueries, queryPatterns, failedQueries, merges, mutations, tableSizes, columnSizes, replicas,
+         replicationQueue, dictionaries, errors, disks, settings, metrics
 
     var title: String {
         switch self {
+        case .health: String(localized: "Health")
         case .processes: String(localized: "Running Queries")
         case .recentQueries: String(localized: "Recent Queries")
         case .queryPatterns: String(localized: "Query Patterns")
@@ -20,6 +21,7 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
         case .columnSizes: String(localized: "Column Sizes")
         case .replicas: String(localized: "Replicas")
         case .replicationQueue: String(localized: "Replication Queue")
+        case .dictionaries: String(localized: "Dictionaries")
         case .errors: String(localized: "Errors")
         case .disks: String(localized: "Disks")
         case .settings: String(localized: "Changed Settings")
@@ -29,6 +31,7 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
 
     var symbol: String {
         switch self {
+        case .health: "stethoscope"
         case .processes: "bolt.horizontal"
         case .recentQueries: "clock"
         case .queryPatterns: "flame"
@@ -39,6 +42,7 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
         case .columnSizes: "chart.bar.xaxis"
         case .replicas: "square.on.square"
         case .replicationQueue: "list.number"
+        case .dictionaries: "character.book.closed"
         case .errors: "xmark.octagon"
         case .disks: "externaldrive"
         case .settings: "slider.horizontal.3"
@@ -70,6 +74,8 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
 
     var sql: String {
         switch self {
+        case .health:
+            Self.healthSQL(cluster: nil)
         case .processes:
             """
             SELECT query_id, user, elapsed, read_rows, read_bytes, total_rows_approx, memory_usage, peak_memory_usage,
@@ -161,6 +167,13 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
             FROM system.replication_queue
             ORDER BY create_time
             """
+        case .dictionaries:
+            """
+            SELECT database, name, status, type, element_count, bytes_allocated, loading_duration, last_successful_update_time,
+                   query_count, hit_rate, found_rate, source, origin, last_exception
+            FROM system.dictionaries
+            ORDER BY last_exception = '', status = 'LOADED', database, name
+            """
         case .errors:
             """
             SELECT last_error_time, name, code, value AS count, last_error_message
@@ -185,12 +198,110 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
     /// aggregates per server.
     func sql(cluster: String?) -> String {
         guard let cluster else { return sql }
+        if self == .health { return Self.healthSQL(cluster: cluster) }
         var text = sql
         text = text.replacingOccurrences(of: #"FROM system\.(\w+)"#, with: "FROM clusterAllReplicas(\(CHSQL.quotedString(cluster)), system.$1)",
                                          options: .regularExpression)
         if let select = text.range(of: "SELECT ") { text.replaceSubrange(select, with: "SELECT hostName() AS host, ") }
         if let group = text.range(of: "GROUP BY ") { text.replaceSubrange(group, with: "GROUP BY host, ") }
         return text
+    }
+
+    /// Health: what needs a look, one row a finding, errors first (nothing when all is
+    /// well): replicas behind, read only or out of their Keeper session; partitions with
+    /// so many parts that inserts slow down (the server's `parts_to_delay_insert`) or fail;
+    /// mutations that fail or run for over an hour; the replication queue's entries tried
+    /// again and again; detached parts; disks nearly full; the server's memory nearly all
+    /// used; inserts delayed; dictionaries that failed to load; queries over ten minutes
+    /// and merges over an hour. Across a cluster each check reads every replica. (No scalar
+    /// subqueries: 23.8's analyzer loses a column made with one in a UNION's branch.)
+    static func healthSQL(cluster: String?) -> String {
+        func from(_ table: String) -> String {
+            cluster.map { "clusterAllReplicas(\(CHSQL.quotedString($0)), system.\(table))" } ?? "system.\(table)"
+        }
+        let host = cluster == nil ? "" : "hostName() AS host, ", byHost = cluster == nil ? "" : "host, "
+        let checks = [
+            """
+            SELECT \(host)if(is_readonly OR is_session_expired OR absolute_delay > 600, 'Error', 'Warning') AS status, 'Replica' AS check,
+                   concat(database, '.', table) AS subject,
+                   multiIf(is_readonly, 'read only', is_session_expired, 'Keeper session expired',
+                           concat(toString(absolute_delay), ' s behind')) AS value,
+                   concat(toString(queue_size), ' in its queue, ', toString(active_replicas), ' of ', toString(total_replicas),
+                          ' replicas active', if(zookeeper_exception = '', '', concat(': ', zookeeper_exception))) AS detail
+            FROM \(from("replicas"))
+            WHERE is_readonly OR is_session_expired OR absolute_delay > 60 OR queue_size > 100
+            """,
+            """
+            SELECT \(byHost)if(parts >= delay, 'Error', 'Warning'), 'Parts', concat(database, '.', table),
+                   concat(toString(parts), ' parts in partition ', partition_id),
+                   concat('inserts slow down at ', toString(delay), ' (parts_to_delay_insert): merges are behind, or inserts too small and too many')
+            FROM (SELECT \(host)database, table, partition_id, count() AS parts FROM \(from("parts")) WHERE active
+                  GROUP BY \(byHost)database, table, partition_id) AS counted
+            CROSS JOIN (SELECT toUInt64(value) AS delay FROM system.merge_tree_settings WHERE name = 'parts_to_delay_insert') AS limits
+            WHERE parts >= delay / 2
+            """,
+            """
+            SELECT \(host)if(latest_fail_reason = '', 'Warning', 'Error'), 'Mutation', concat(database, '.', table),
+                   concat(mutation_id, ': ', substring(command, 1, 120)),
+                   if(latest_fail_reason = '', concat('running for ', toString(intDiv(dateDiff('second', create_time, now()), 60)), ' min, ',
+                                                     toString(parts_to_do), ' parts to do'), latest_fail_reason)
+            FROM \(from("mutations"))
+            WHERE NOT is_done AND (latest_fail_reason != '' OR create_time < now() - INTERVAL 1 HOUR)
+            """,
+            """
+            SELECT \(host)'Warning', 'Replication queue', concat(database, '.', table),
+                   concat(toString(count()), ' entries tried up to ', toString(max(num_tries)), ' times'),
+                   any(last_exception)
+            FROM \(from("replication_queue"))
+            WHERE num_tries > 100 OR (last_exception != '' AND num_tries > 10)
+            GROUP BY \(byHost)database, table
+            """,
+            """
+            SELECT \(host)'Warning', 'Detached parts', concat(database, '.', table), concat(toString(count()), ' detached'),
+                   concat('reason: ', if(reason = '', 'detached by hand', reason))
+            FROM \(from("detached_parts"))
+            GROUP BY \(byHost)database, table, reason
+            """,
+            """
+            SELECT \(host)if(free_space < total_space / 20, 'Error', 'Warning'), 'Disk', name,
+                   concat(toString(round(100 - free_space / total_space * 100, 1)), '% used'),
+                   concat(formatReadableSize(free_space), ' free of ', formatReadableSize(total_space), ' at ', path)
+            FROM \(from("disks"))
+            WHERE total_space > 0 AND free_space < total_space / 10
+            """,
+            """
+            SELECT \(host)'Warning', 'Memory', 'server', concat(toString(round(maxIf(value, metric = 'MemoryResident') / maxIf(value, metric = 'OSMemoryTotal') * 100)), '% used'),
+                   concat(formatReadableSize(maxIf(value, metric = 'MemoryResident')), ' of ', formatReadableSize(maxIf(value, metric = 'OSMemoryTotal')))
+            FROM \(from("asynchronous_metrics"))
+            WHERE metric IN ('MemoryResident', 'OSMemoryTotal')
+            \(cluster == nil ? "" : "GROUP BY host")
+            HAVING maxIf(value, metric = 'OSMemoryTotal') > 0 AND maxIf(value, metric = 'MemoryResident') > maxIf(value, metric = 'OSMemoryTotal') * 0.9
+            """,
+            """
+            SELECT \(host)'Warning', 'Inserts', 'server', concat(toString(value), ' delayed now'),
+                   'a partition has too many parts: inserts wait for merges'
+            FROM \(from("metrics"))
+            WHERE metric = 'DelayedInserts' AND value > 0
+            """,
+            """
+            SELECT \(host)'Error', 'Dictionary', concat(database, if(database = '', '', '.'), name), toString(status), last_exception
+            FROM \(from("dictionaries"))
+            WHERE last_exception != ''
+            """,
+            """
+            SELECT \(host)'Warning', 'Query', query_id, concat('running for ', toString(round(elapsed)), ' s by ', user), substring(query, 1, 200)
+            FROM \(from("processes"))
+            WHERE elapsed > 600 AND NOT (Settings['log_comment'] = \(ownComment) AND user = currentUser())
+            """,
+            """
+            SELECT \(host)'Warning', 'Merge', concat(database, '.', table), concat('running for ', toString(round(elapsed / 60)), ' min'),
+                   concat(toString(round(progress * 100)), '% done, ', toString(num_parts), ' parts into ', result_part_name)
+            FROM \(from("merges"))
+            WHERE elapsed > 3600
+            """,
+        ]
+        let columns = (cluster == nil ? "" : "host, ") + "status, check, subject, value, detail"
+        return "SELECT \(columns) FROM (\n" + checks.joined(separator: "\nUNION ALL\n") + "\n)\nORDER BY status = 'Error' DESC, check, subject"
     }
 
     /// A row's kill statement, from its values by column name (`nil`: none

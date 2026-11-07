@@ -31,6 +31,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             UIKeyCommand(title: String(localized: "Run Statement"), action: #selector(QueryViewController.runCommand(_:)), input: "\r", modifierFlags: .command),
             UIKeyCommand(title: String(localized: "Stop"), action: #selector(QueryViewController.stopCommand(_:)), input: ".", modifierFlags: .command),
             UIKeyCommand(title: String(localized: "Check Statement"), action: #selector(QueryViewController.checkCommand(_:)), input: "b", modifierFlags: .command),
+            UIKeyCommand(title: String(localized: "Format Statement"), action: #selector(QueryViewController.formatCommand(_:)), input: "f",
+                         modifierFlags: [.control, .shift]),
             UIKeyCommand(title: String(localized: "Explain Plan"), action: #selector(QueryViewController.explainCommand(_:)), input: "\r",
                          modifierFlags: [.command, .alternate]),
         ]), afterMenu: .view)

@@ -164,6 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item(String(localized: "Run Statement"), #selector(QueryWindowController.runStatement(_:)), "\r"),
             item(String(localized: "Stop"), #selector(QueryWindowController.stopQuery(_:)), "."),
             item(String(localized: "Check Statement"), #selector(QueryWindowController.checkStatement(_:)), "b"),
+            item(String(localized: "Format Statement"), #selector(QueryWindowController.formatStatement(_:)), "f", [.control, .shift]),
             .separator(),
             {
                 let explain = item(String(localized: "Explain Plan"), #selector(QueryWindowController.explainStatement(_:)), "\r", [.command, .option])

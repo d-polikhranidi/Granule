@@ -1030,7 +1030,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         if let row = clickedRow, let column, let index = Int(column.id), let text = source.fullText(row: row, columnIndex: index) {
             let title = source.result.names[index] + ": " + source.result.typeNames[index]
             items.append(UIAction(title: String(localized: "Show Value"), image: UIImage(systemName: "doc.text.magnifyingglass")) { [weak self] _ in
-                let inspector = UINavigationController(rootViewController: CellInspectorController(text: text, title: title))
+                let inspector = UINavigationController(rootViewController: CellInspectorController(text: text, type: source.result.types[index], title: title))
                 self?.present(inspector, animated: true)
             })
             items.append(UIAction(title: String(localized: "Copy Value"), image: UIImage(systemName: "doc.on.doc")) { _ in
@@ -1068,13 +1068,15 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     }
 }
 
-/// A cell's whole value: JSON laid out, selectable, with Copy.
+/// A cell's whole value: JSON, arrays, tuples and maps laid out, selectable, with Copy.
 final class CellInspectorController: UIViewController {
     private let text: String
+    private let type: CHType
     private let heading: String
 
-    init(text: String, title: String) {
+    init(text: String, type: CHType, title: String) {
         self.text = text
+        self.type = type
         heading = title
         super.init(nibName: nil, bundle: nil)
     }
@@ -1089,8 +1091,9 @@ final class CellInspectorController: UIViewController {
         let textView = UITextView()
         textView.isEditable = false
         textView.font = SQLHighlighting.font
-        textView.text = Self.prettyJSON(text) ?? text
+        textView.text = text
         textView.translatesAutoresizingMaskIntoConstraints = false
+        self.textView = textView
         view.addSubview(textView)
         NSLayoutConstraint.activate([
             textView.topAnchor.constraint(equalTo: view.topAnchor), textView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -1098,6 +1101,22 @@ final class CellInspectorController: UIViewController {
         ])
         navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
         navigationItem.leftBarButtonItem = UIBarButtonItem(title: String(localized: "Copy"), primaryAction: UIAction { [text] _ in UIPasteboard.general.string = text })
+    }
+
+    private var textView: UITextView?
+    private var laidOutColumns = 0
+
+    /// The value laid out for the view's width (JSON, arrays, tuples, maps); Copy copies it as it was.
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        guard let textView else { return }
+        let character = ("0" as NSString).size(withAttributes: [.font: SQLHighlighting.font]).width
+        let width = textView.bounds.width - textView.textContainerInset.left - textView.textContainerInset.right
+            - 2 * textView.textContainer.lineFragmentPadding
+        let columns = max(16, Int(width / max(1, character)))
+        guard columns != laidOutColumns else { return }
+        laidOutColumns = columns
+        textView.text = Self.prettyJSON(text) ?? (CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, width: columns) : nil) ?? text
     }
 
     static func prettyJSON(_ text: String) -> String? {

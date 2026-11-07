@@ -2,10 +2,10 @@ import AppKit
 import ClickHouseCore
 import Gingham
 
-/// A cell's whole value in a popover: JSON laid out, selectable, with Copy.
+/// A cell's whole value in a popover: JSON, arrays, tuples and maps laid out, selectable, with Copy.
 enum CellInspector {
-    static func show(_ text: String, title: String, relativeTo rect: CGRect, of view: NSView) {
-        let shown = prettyJSON(text) ?? text
+    static func show(_ text: String, type: CHType, title: String, relativeTo rect: CGRect, of view: NSView) {
+        let shown = laidOut(text, type: type, columns: columns(in: 520 - 24)) ?? text
         let textView = NSTextView()
         textView.isEditable = false
         textView.isSelectable = true
@@ -44,6 +44,18 @@ enum CellInspector {
         popover.contentViewController = controller
         popover.behavior = .transient
         popover.show(relativeTo: rect, of: view, preferredEdge: .maxY)
+    }
+
+    /// The text laid out: JSON (a String or JSON column's), or an array, tuple or map as
+    /// ClickHouse writes it, an item a line where it doesn't fit (Copy copies it as it was).
+    static func laidOut(_ text: String, type: CHType, columns: Int) -> String? {
+        prettyJSON(text) ?? (CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, width: columns) : nil)
+    }
+
+    /// How many of the editor font's characters fit in a width.
+    static func columns(in width: CGFloat) -> Int {
+        let character = ("0" as NSString).size(withAttributes: [.font: SQLHighlighting.font]).width
+        return max(16, Int(width / max(1, character)))
     }
 
     /// The text laid out, if it's a JSON object or array.
@@ -93,6 +105,27 @@ final class ResultInspector: NSViewController, GHTableViewDataSource, GHTableVie
     private var columnIndex = -1
     private var rowCame = false
     private var text = ""
+    private var type = CHType(parsing: "String")
+    private var isNull = false
+    /// The width the value was laid out for, in characters.
+    private var laidOutColumns = 0
+
+    private var layoutColumns: Int {
+        CellInspector.columns(in: (valueView.enclosingScrollView?.contentSize.width ?? valueView.bounds.width)
+            - 2 * valueView.textContainerInset.width - 2 * (valueView.textContainer?.lineFragmentPadding ?? 0))
+    }
+
+    /// The value in the text view: laid out to fit the pane (JSON, arrays, tuples, maps).
+    private func showValue() {
+        let length = (text as NSString).length
+        var shown = length > Self.shownLength ? String(text.prefix(Self.shownLength)) : text
+        laidOutColumns = layoutColumns
+        if length <= Self.shownLength, let pretty = CellInspector.laidOut(text, type: type, columns: laidOutColumns) { shown = pretty }
+        valueView.font = SQLHighlighting.font
+        valueView.textColor = isNull ? .tertiaryLabelColor : .labelColor
+        valueView.string = isNull ? "NULL" : shown
+        valueView.scroll(.zero)
+    }
     /// The row's values as their cells show them, by column.
     private var values: [String] = []
     /// The text laid out at most (Copy copies all of it).
@@ -206,6 +239,8 @@ final class ResultInspector: NSViewController, GHTableViewDataSource, GHTableVie
 
     override func viewDidLayout() {
         super.viewDidLayout()
+        // The value laid out again for the pane's width (it's resized by its divider).
+        if layoutColumns != laidOutColumns, !text.isEmpty { showValue() }
         // Once the panes have their heights (on the first pass they have none yet).
         guard !placedDivider, split.arrangedSubviews.map(\.frame.height).reduce(0, +) > 300 else { return }
         placedDivider = true
@@ -233,15 +268,11 @@ final class ResultInspector: NSViewController, GHTableViewDataSource, GHTableVie
         placeholder.isHidden = true
         heading.stringValue = source.result.names[columnIndex]
         typeLabel.stringValue = source.result.typeNames[columnIndex]
-        let isNull = source.isNull(row: row, columnIndex: columnIndex)
+        isNull = source.isNull(row: row, columnIndex: columnIndex)
         text = isNull ? "" : source.fullText(row: row, columnIndex: columnIndex) ?? ""
+        type = source.result.types[columnIndex]
+        showValue()
         let length = (text as NSString).length
-        var shown = length > Self.shownLength ? String(text.prefix(Self.shownLength)) : text
-        if length <= Self.shownLength, let pretty = CellInspector.prettyJSON(text) { shown = pretty }
-        valueView.font = SQLHighlighting.font
-        valueView.textColor = isNull ? .tertiaryLabelColor : .labelColor
-        valueView.string = isNull ? "NULL" : shown
-        valueView.scroll(.zero)
         lengthLabel.stringValue = isNull ? String(localized: "No value (NULL)")
             : length > Self.shownLength ? String(localized: "\(length.formatted()) characters, the first \(Self.shownLength.formatted()) shown")
             : String(localized: "\(length.formatted()) characters")

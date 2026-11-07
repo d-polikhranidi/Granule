@@ -1138,7 +1138,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         guard let columnID, let index = Int(columnID), let text = source.fullText(row: row, columnIndex: index),
               let frame = table.frameOfCell(row: row, columnID: columnID) else { return }
         let title = source.result.names[index] + ": " + source.result.typeNames[index]
-        CellInspector.show(text, title: title, relativeTo: frame, of: table)
+        CellInspector.show(text, type: source.result.types[index], title: title, relativeTo: frame, of: table)
     }
 
     /// The inspector on the focused cell (or the selected row's first value), while it shows.

@@ -91,6 +91,8 @@ nonisolated enum ServerView: String, CaseIterable, Hashable, Sendable {
         case .queryPatterns:
             """
             SELECT count() AS runs, sum(query_duration_ms) AS total_ms, round(avg(query_duration_ms)) AS avg_ms,
+                   round(quantile(0.5)(query_duration_ms)) AS p50_ms, round(quantile(0.9)(query_duration_ms)) AS p90_ms,
+                   round(quantile(0.99)(query_duration_ms)) AS p99_ms,
                    max(query_duration_ms) AS max_ms, sum(read_rows) AS read_rows, sum(read_bytes) AS read_bytes,
                    max(memory_usage) AS max_memory, normalized_query_hash, any(query) AS example
             FROM system.query_log

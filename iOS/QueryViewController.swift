@@ -324,6 +324,16 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     @objc func stopCommand(_ sender: Any?) { queries.cancel() }
     @objc func checkCommand(_ sender: Any?) { checker.checkNow(text: editor.text, cursor: editor.selectedRange.location) }
     @objc func formatCommand(_ sender: Any?) { formatStatement() }
+    @objc func detailsCommand(_ sender: Any?) { showQueryDetails() }
+
+    /// The last statement of the user's that finished here: Query Details shows it.
+    private var lastRun: QueryHistory.Entry?
+
+    /// Query Details: the last statement's measures from the server's log, beside its run before.
+    private func showQueryDetails() {
+        guard let run = lastRun, let id = run.queryID else { return }
+        queries.runViewersOwn(QueryController.detailsSQL(of: id, comparedWith: run.previousQueryID))
+    }
     @objc func saveQueryCommand(_ sender: Any?) { saveQuery() }
     @objc func libraryCommand(_ sender: Any?) { showLibrary(.saved) }
     @objc func findCommand(_ sender: Any?) { navigationItem.searchController?.searchBar.becomeFirstResponder() }
@@ -628,9 +638,13 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         if !queries.isRunning {
             statusTimer?.invalidate()
             statusTimer = nil
-            if case .finished(let stats) = queries.state, let sql = queries.statement, !historySaved.contains(stats.queryID) {
+            // Query Details read too soon: the server writes its log every few seconds.
+            if queries.isViewersOwn, case .finished(let stats) = queries.state, stats.rows == 0 {
+                statusLabel.text = String(localized: "The server hasn't written this run to its log yet: it does every few seconds. Try again in a moment.")
+            }
+            if case .finished(let stats) = queries.state, let sql = queries.statement, queries.isUsersStatement, !historySaved.contains(stats.queryID) {
                 historySaved.insert(stats.queryID)
-                history.add(sql, rows: stats.rows, seconds: QueryController.seconds(stats.elapsed))
+                lastRun = history.add(sql, rows: stats.rows, seconds: QueryController.seconds(stats.elapsed), queryID: stats.queryID)
             }
         }
     }
@@ -780,6 +794,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         let format = UIAction(title: String(localized: "Format Statement"), image: UIImage(systemName: "text.alignleft")) { [weak self] _ in
             self?.formatStatement()
         }
+        let details = UIAction(title: String(localized: "Query Details"), image: UIImage(systemName: "chart.bar.doc.horizontal"),
+                               attributes: lastRun?.queryID == nil ? .disabled : []) { [weak self] _ in self?.showQueryDetails() }
         let check = UIAction(title: String(localized: "Check Statement"), image: UIImage(systemName: "checkmark.seal")) { [weak self] _ in
             guard let self else { return }
             checker.checkNow(text: editor.text, cursor: editor.selectedRange.location)
@@ -799,7 +815,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             guard let self else { return }
             AppDelegate.presentSettings(from: self)
         }
-        return [chartAction, historyMenu, save, check, format, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize, settings]
+        return [chartAction, historyMenu, save, check, format, details, explain, export] + (clusters.isEmpty ? [] : [scope]) + [editorSize, settings]
     }
 
     /// Format Statement: the selection, or the statement at the cursor, laid out by the server's

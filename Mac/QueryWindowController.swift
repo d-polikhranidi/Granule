@@ -779,6 +779,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     }
 
     private func show(_ error: Error) {
+        messageLabel.textColor = .systemRed
         messageLabel.stringValue = error.viewerDescription
         messageLabel.isHidden = false
     }
@@ -865,15 +866,33 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             #if DEBUG
             debugStartActions()
             #endif
-            if case .finished(let stats) = queries.state, let sql = queries.statement, !historySaved.contains(stats.queryID) {
+            // Query Details read too soon: the server writes its log every few seconds.
+            if queries.isViewersOwn, case .finished(let stats) = queries.state, stats.rows == 0 {
+                messageLabel.textColor = .secondaryLabelColor
+                messageLabel.stringValue = String(localized: "The server hasn't written this run to its log yet: it does every few seconds. Try again in a moment.")
+                messageLabel.isHidden = false
+            }
+            if case .finished(let stats) = queries.state, let sql = queries.statement, queries.isUsersStatement, !historySaved.contains(stats.queryID) {
                 historySaved.insert(stats.queryID)
-                history.add(sql, rows: stats.rows, seconds: QueryController.seconds(stats.elapsed))
+                lastRun = history.add(sql, rows: stats.rows, seconds: QueryController.seconds(stats.elapsed), queryID: stats.queryID)
             }
         }
         window?.toolbar?.validateVisibleItems()
     }
 
     private var historySaved = Set<String>()
+    /// The last statement of the user's that finished here: Query Details shows it.
+    private var lastRun: QueryHistory.Entry?
+
+    /// Query > Query Details (⌥⌘D): the last statement's measures from the server's log
+    /// (time, rows, bytes, memory, every ProfileEvent), beside its run before, if any.
+    @objc func showQueryDetails(_ sender: Any?) {
+        guard let run = lastRun, let id = run.queryID else { return }
+        hideDetails()
+        messageLabel.isHidden = true
+        queries.runViewersOwn(QueryController.detailsSQL(of: id, comparedWith: run.previousQueryID))
+        startStatusTimer()
+    }
 
     // MARK: Editing
 
@@ -1119,6 +1138,10 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 queries.setLook(parts[1] == "heatmap" ? .heatmap : .dataBars, ofColumn: parts[0])
             }
         }
+        // `-ViewerQueryDetails <seconds>`: Query Details of the statement run, that long after it.
+        if let wait = UserDefaults.standard.string(forKey: "ViewerQueryDetails").flatMap(Double.init), queries.isUsersStatement {
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) { self.showQueryDetails(nil) }
+        }
         // `-ViewerInspector <row>,<column>`: the inspector shown on that cell (result indexes).
         if let cell = UserDefaults.standard.string(forKey: "ViewerInspector") {
             let parts = cell.split(separator: ",").compactMap { Int($0) }
@@ -1333,6 +1356,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         case #selector(exportResult(_:)): queries.canExport
         case #selector(showValue(_:)): queries.source != nil
         case #selector(checkStatement(_:)), #selector(formatStatement(_:)): client.serverInfo != nil
+        case #selector(showQueryDetails(_:)): lastRun?.queryID != nil && !queries.isRunning
         default: true
         }
     }

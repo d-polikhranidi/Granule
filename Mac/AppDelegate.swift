@@ -165,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item(String(localized: "Stop"), #selector(QueryWindowController.stopQuery(_:)), "."),
             item(String(localized: "Check Statement"), #selector(QueryWindowController.checkStatement(_:)), "b"),
             item(String(localized: "Format Statement"), #selector(QueryWindowController.formatStatement(_:)), "f", [.control, .shift]),
+            item(String(localized: "Query Details"), #selector(QueryWindowController.showQueryDetails(_:)), "d", [.command, .option]),
             .separator(),
             item(String(localized: "Save Query…"), #selector(QueryWindowController.saveQuery(_:)), "s"),
             item(String(localized: "Saved Queries and History…"), #selector(QueryWindowController.showQueryLibrary(_:)), "y"),

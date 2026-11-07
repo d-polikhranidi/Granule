@@ -484,6 +484,12 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         onNewTab(self)
     }
 
+    /// A live view waits while the window can't be seen (another tab, minimized, covered).
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard let window else { return }
+        queries.isPaused = !window.occlusionState.contains(.visible)
+    }
+
     func windowWillClose(_ notification: Notification) {
         if let focusMonitor { NSEvent.removeMonitor(focusMonitor) }
         focusMonitor = nil

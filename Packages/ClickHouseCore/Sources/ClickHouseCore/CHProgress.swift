@@ -28,7 +28,7 @@ extension CHClient {
         let text = try await plainText("""
             SELECT read_rows, read_bytes, total_rows_approx, memory_usage, elapsed
             FROM system.processes WHERE query_id = \(CHSQL.quotedString(queryID)) FORMAT TSV
-            """)
+            """, background: true)
         let fields = text.trimmingCharacters(in: .newlines).split(separator: "\t").map(String.init)
         guard fields.count >= 5 else { return nil }
         return CHQueryProgress(readRows: Int(fields[0]) ?? 0, readBytes: Int(fields[1]) ?? 0, totalRows: Int(fields[2]) ?? 0,
@@ -43,7 +43,7 @@ extension CHClient {
             FROM system.query_log
             WHERE query_id = \(CHSQL.quotedString(queryID)) AND type != 'QueryStart' AND event_date >= yesterday()
             ORDER BY event_time DESC LIMIT 1 FORMAT TSV
-            """)
+            """, background: true)
         let fields = text.trimmingCharacters(in: .newlines).split(separator: "\t").map(String.init)
         guard fields.count >= 5 else { return nil }
         return CHServerStats(readRows: Int(fields[0]) ?? 0, readBytes: Int(fields[1]) ?? 0, memory: Int(fields[2]) ?? 0,

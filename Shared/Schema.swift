@@ -93,7 +93,7 @@ nonisolated struct Schema {
 
     /// A table's `CREATE` statement, as the server writes it.
     static func createStatement(of table: Table, client: CHClient) async throws -> String {
-        let text = try await client.plainText("SHOW CREATE TABLE \(table.qualifiedName) FORMAT TSVRaw")
+        let text = try await client.plainText("SHOW CREATE TABLE \(table.qualifiedName) FORMAT TSVRaw", background: true)
         return text.trimmingCharacters(in: .newlines)
     }
 

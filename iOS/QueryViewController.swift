@@ -187,6 +187,16 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         NotificationCenter.default.addObserver(forName: AppearanceSettings.didChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.applyAppearance() }
         }
+        // A live view waits while its window is in the background.
+        for (name, paused) in [(UIScene.didEnterBackgroundNotification, true), (UIScene.willEnterForegroundNotification, false)] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                let scene = (notification.object as AnyObject?).map(ObjectIdentifier.init)
+                MainActor.assumeIsolated {
+                    guard let self, let scene, scene == self.view.window?.windowScene.map(ObjectIdentifier.init) else { return }
+                    self.queries.isPaused = paused
+                }
+            }
+        }
         connect()
     }
 

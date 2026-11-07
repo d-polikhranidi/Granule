@@ -122,7 +122,7 @@ extension CHClient {
         guard !trimmed.isEmpty, !trimmed.uppercased().hasPrefix("EXPLAIN") else { return [] }
         let syntax = "EXPLAIN AST "
         do {
-            _ = try await plainText(syntax + statement, settings: settings)
+            _ = try await plainText(syntax + statement, settings: settings, background: true)
         } catch let error as CHServerError {
             return Self.problems(from: error, in: statement, prefix: syntax).map { [$0] } ?? []
         }
@@ -150,7 +150,7 @@ extension CHClient {
         while let form = forms.first {
             forms.removeFirst()
             do {
-                _ = try await plainText(form + query, settings: settings)
+                _ = try await plainText(form + query, settings: settings, background: true)
                 return nil
             } catch let error as CHServerError {
                 // Not the user's: the limits stopped it, or the analyzer is off (QUERY TREE needs it).
@@ -172,7 +172,13 @@ extension CHClient {
         var message = error.message
         var range: NSRange?
         if let prefix, let match = message.range(of: #"failed at position (\d+)"#, options: .regularExpression),
-           let position = Int(message[match].split(separator: " ").last ?? "") {
+           var position = Int(message[match].split(separator: " ").last ?? "") {
+            // 26.10+ places the error where it was seen and names the bracket left open apart:
+            // "failed at position 32 (numbers): … Unmatched parentheses: '(' at position 25 is never closed."
+            if let open = message.range(of: #"at position \d+ is never closed"#, options: .regularExpression),
+               let opened = Int(message[open].split(separator: " ")[2]) {
+                position = opened
+            }
             let offset = position - 1 - prefix.utf8.count
             if offset >= 0, let location = Self.utf16Offset(ofUTF8: offset, in: statement) {
                 let token = CHSQL.tokens(statement).first { NSLocationInRange(location, $0.range) && $0.kind != .whitespace }
@@ -185,6 +191,8 @@ extension CHClient {
                 rest = String(rest[close.upperBound...])
                 if let stop = rest.range(of: ". ") { rest = String(rest[stop.upperBound...]) } else { rest = "" }
             }
+            // A place in the request says nothing to the user (its offset counts the prefix too).
+            rest = rest.replacingOccurrences(of: #" at position \d+"#, with: "", options: .regularExpression)
             message = near.isEmpty ? String(localized: "Syntax error.") : String(localized: "Syntax error at \(near).")
             if !rest.isEmpty { message += " " + Self.shortened(rest) }
         }

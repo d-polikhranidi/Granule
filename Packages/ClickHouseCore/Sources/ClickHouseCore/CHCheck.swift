@@ -153,8 +153,9 @@ extension CHClient {
                 _ = try await plainText(form + query, settings: settings, background: true)
                 return nil
             } catch let error as CHServerError {
-                // Not the user's: the limits stopped it, or the analyzer is off (QUERY TREE needs it).
-                if [159, 158, 307, 241, 394, 160].contains(error.code) { return nil }
+                // Not the statement's: the limits stopped it, the user may not read a table (ACCESS_DENIED:
+                // running it says so), or the analyzer is off (QUERY TREE needs it).
+                if [159, 158, 307, 241, 394, 160, 497].contains(error.code) { return nil }
                 if error.code == 48 || error.message.localizedCaseInsensitiveContains("analyzer"), !forms.isEmpty { continue }
                 return error
             }

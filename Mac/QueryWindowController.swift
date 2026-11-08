@@ -194,6 +194,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         editor.textContainer?.widthTracksTextView = true
         editor.textStorage?.delegate = self
         editor.delegate = self
+        editor.setAccessibilityLabel(String(localized: "SQL editor"))
         editor.string = UserDefaults.standard.string(forKey: editorKey) ?? (tabNumber == 0 ? "SELECT version(), uptime(), timezone()\n" : "")
         if let storage = editor.textStorage { SQLHighlighting.apply(to: storage) }
 
@@ -1322,7 +1323,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
             ("Arrow", "Arrow", "arrow"), (String(localized: "JSON lines"), "JSONEachRow", "jsonl"),
         ]
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "result.csv"
+        panel.nameFieldStringValue = queries.exportName + ".csv"
         let popUp = NSPopUpButton()
         popUp.addItems(withTitles: formats.map(\.title))
         let format = NSStackView(views: [NSTextField(labelWithString: String(localized: "Format:")), popUp])
@@ -1347,10 +1348,10 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                     let bytes = try await self.client.download(sql, format: format, to: url, parameters: self.parameterValues) { written in
                         // (The export holds the window until it's done: so does this.)
                         Task { @MainActor in
-                            self.statusLabel.stringValue = String(localized: "Exporting… \(ByteCountFormatter.string(fromByteCount: Int64(written), countStyle: .file))")
+                            self.statusLabel.stringValue = String(localized: "Exporting… \(Int64(written).formatted(.byteCount(style: .file)))")
                         }
                     }
-                    self.statusLabel.stringValue = String(localized: "Exported \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)) to \(url.lastPathComponent).")
+                    self.statusLabel.stringValue = String(localized: "Exported \(Int64(bytes).formatted(.byteCount(style: .file))) to \(url.lastPathComponent).")
                 } catch {
                     self.show(error)
                 }
@@ -1361,7 +1362,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     /// File > Export Shown Rows… (⌥⌘E): the rows as the table shows them (its sort, its search),
     /// as an Excel workbook or CSV, written by the table itself; nothing runs again.
     @objc func exportShownRows(_ sender: Any?) {
-        table.exportFileName = "result"
+        table.exportFileName = queries.exportName
         table.exportDocument(sender)
     }
 

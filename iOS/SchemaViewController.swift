@@ -78,11 +78,13 @@ final class SchemaViewController: UICollectionViewController, UISearchResultsUpd
                 content.secondaryText = table.detail
                 content.image = UIImage(systemName: table.isView ? "eye" : "tablecells")
                 // The chevron opens the columns; a tap on the row shows its rows.
-                cell.accessories = [.outlineDisclosure(options: .init(style: .header)) { [weak self] in self?.toggle(node) }]
+                cell.accessories = [.outlineDisclosure(options: .init(style: .cell)) { [weak self] in self?.toggle(node) }]
             case .column(let column):
                 content.text = column.name
                 content.secondaryText = [column.type, column.sizeText ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
-                content.image = column.isInPrimaryKey ? UIImage(systemName: "key") : nil
+                // The others keep the key's room, so the names line up.
+                content.image = UIImage(systemName: "key")
+                if !column.isInPrimaryKey { content.imageProperties.tintColor = .clear }
                 cell.accessories = []
             case .message(let text):
                 content.text = text

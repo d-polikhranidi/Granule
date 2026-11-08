@@ -469,7 +469,7 @@
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Apache License 2.0"
+            "value" : "Лицензия Apache 2.0"
           }
         }
       }
@@ -479,7 +479,7 @@
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Apache License 2.0 с Runtime Library Exception"
+            "value" : "Лицензия Apache 2.0 с исключением Runtime Library Exception"
           }
         }
       }
@@ -564,6 +564,24 @@
         }
       }
     },
+    "Automatic.short" : {
+      "comment" : "Compression chosen by the app, in a narrow segment",
+      "extractionState" : "extracted_with_value",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "Automatic"
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Авто"
+          }
+        }
+      }
+    },
     "BSD License" : {
       "localizations" : {
         "ru" : {
@@ -599,7 +617,7 @@
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Boost Software License 1.0"
+            "value" : "Лицензия Boost 1.0"
           }
         }
       }
@@ -670,6 +688,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Отменено, получено строк: %@"
+          }
+        }
+      }
+    },
+    "Cancelled after 1 row" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Отменено, получена 1 строка"
           }
         }
       }
@@ -1570,6 +1598,16 @@
         }
       }
     },
+    "Failed after 1 row" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ошибка, получена 1 строка"
+          }
+        }
+      }
+    },
     "File" : {
       "localizations" : {
         "ru" : {
@@ -1825,7 +1863,7 @@
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Импортировать из clickhouse-client…"
+            "value" : "Импорт из clickhouse-client…"
           }
         }
       }
@@ -1914,12 +1952,12 @@
         }
       }
     },
-    "Its password, keys and certificate are removed from the Keychain. Its history stays." : {
+    "Its password, keys and certificate are removed from the Keychain, and its history of queries too." : {
       "localizations" : {
         "ru" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Его пароль, ключи и сертификат будут удалены из Связки ключей. История останется."
+            "value" : "Его пароль, ключи и сертификат будут удалены из Связки ключей, а с ними и история его запросов."
           }
         }
       }
@@ -3048,6 +3086,16 @@
     },
     "SHA-256" : {
       "shouldTranslate" : false
+    },
+    "SQL editor" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Редактор SQL"
+          }
+        }
+      }
     },
     "SSH Tunnel" : {
       "localizations" : {
@@ -4586,6 +4634,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "по умолчанию для пользователя"
+          }
+        }
+      }
+    },
+    "this month" : {
+      "comment" : "A comment in the sample SQL",
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "в этом месяце"
           }
         }
       }

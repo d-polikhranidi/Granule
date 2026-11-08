@@ -343,7 +343,7 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         guard let endpoint = targetEndpoint, let window else { return }
         let alert = NSAlert()
         alert.messageText = String(localized: "Delete “\(endpoint.title)”?")
-        alert.informativeText = String(localized: "Its password, keys and certificate are removed from the Keychain. Its history stays.")
+        alert.informativeText = String(localized: "Its password, keys and certificate are removed from the Keychain, and its history of queries too.")
         alert.addButton(withTitle: String(localized: "Delete"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         alert.buttons.first?.hasDestructiveAction = true

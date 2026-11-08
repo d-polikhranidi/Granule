@@ -12,6 +12,11 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     let client: CHClient
     var onClose: () -> Void = {}
     var onConnected: () -> Void = {}
+    /// The split it's the secondary of: on an iPhone, once the schema is back in front, the
+    /// query's navigation is out of the window and `splitViewController` is nil.
+    weak var split: UISplitViewController?
+    private var runItem: UIBarButtonItem?
+    private var stopItem: UIBarButtonItem?
 
     private let editor = UITextView()
     private let table = GHTableView(frame: .zero)
@@ -76,6 +81,12 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         let menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in completion(self?.menuElements() ?? []) }])
         let more = UIBarButtonItem(title: String(localized: "More"), image: UIImage(systemName: "ellipsis"), menu: menu)
         navigationItem.rightBarButtonItems = [more, stop, run]
+        runItem = run
+        stopItem = stop
+        updateRunAndStop()
+        // On an iPhone Run and Stop take turns (the title keeps its room).
+        registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _: UITraitCollection) in self.updateRunAndStop() }
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (self: Self, _: UITraitCollection) in self.applyAppearance() }
         navigationItem.leftItemsSupplementBackButton = true
         navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.close() })
 
@@ -90,6 +101,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         navigationItem.hidesSearchBarWhenScrolling = false
 
         editor.font = SQLHighlighting.font
+        editor.accessibilityLabel = String(localized: "SQL editor")
         editor.autocapitalizationType = .none
         editor.autocorrectionType = .no
         editor.spellCheckingType = .no
@@ -119,6 +131,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         statusLabel.font = .preferredFont(forTextStyle: .caption1)
         statusLabel.textColor = .secondaryLabel
         statusLabel.adjustsFontForContentSizeCategory = true
+        // An iPhone's width cuts a whole status to one line.
+        statusLabel.numberOfLines = 3
 
         let results = resultsView
         chart.view.isHidden = true
@@ -160,7 +174,11 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         chartBar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 2, trailing: 12)
         chartBar.isHidden = true
         chart.onChange = { [weak self] in self?.updateChartBar() }
-        let stack = UIStackView(arrangedSubviews: [editor, checkBar, detailsBar, chartBar, messageLabel, results, statusLabel])
+        // The status inset as the bars (it wraps on an iPhone).
+        let statusBar = UIStackView(arrangedSubviews: [statusLabel])
+        statusBar.isLayoutMarginsRelativeArrangement = true
+        statusBar.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)
+        let stack = UIStackView(arrangedSubviews: [editor, checkBar, detailsBar, chartBar, messageLabel, results, statusBar])
         stack.axis = .vertical
         stack.spacing = 4
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -174,7 +192,6 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             stack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -4),
             editorHeight,
         ])
-        messageLabel.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12)
         statusLabel.textAlignment = .center
 
         queries.onChange = { [weak self] in self?.updateStatus() }
@@ -221,7 +238,11 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             ? UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 0.24, green: 0.13, blue: 0.13, alpha: 1) : UIColor(red: 1, green: 0.955, blue: 0.95, alpha: 1) }
             : AppearanceSettings.theme.background ?? .secondarySystemBackground
         var tableStyle = table.tableStyle
-        tableStyle.fontSize = AppearanceSettings.resultFontSize
+        // The system's size follows the user's text size (Dynamic Type), up to a size rows still fit.
+        let metrics = UIFontMetrics(forTextStyle: .body)
+        tableStyle.fontSize = AppearanceSettings.resultFontSize ?? min(28, metrics.scaledValue(for: UIFont.systemFontSize))
+        tableStyle.headerFontSize = AppearanceSettings.resultFontSize == nil
+            ? min(24, metrics.scaledValue(for: UIFont.smallSystemFontSize)) : nil
         table.tableStyle = tableStyle
         // Set again so the rows' height follows a new text size too.
         table.density = nil
@@ -652,7 +673,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
     /// The editor and result in front (on an iPhone, the schema goes).
     private func showSecondary() {
-        splitViewController?.show(.secondary)
+        (splitViewController ?? split)?.show(.secondary)
     }
 
     private func showText(_ text: String?) {
@@ -663,7 +684,14 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     }
 
     private func show(_ error: Error) {
-        messageLabel.text = error.viewerDescription
+        // Inset as the bars above it (a label's layout margins don't move its text).
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.firstLineHeadIndent = 12
+        paragraph.headIndent = 12
+        paragraph.tailIndent = -12
+        messageLabel.attributedText = NSAttributedString(string: error.viewerDescription, attributes: [
+            .paragraphStyle: paragraph, .font: UIFont.preferredFont(forTextStyle: .footnote), .foregroundColor: UIColor.systemRed,
+        ])
         messageLabel.isHidden = false
     }
 
@@ -719,7 +747,14 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         updateChart()
     }
 
+    private func updateRunAndStop() {
+        let narrow = traitCollection.horizontalSizeClass == .compact
+        runItem?.isHidden = narrow && queries.isRunning
+        stopItem?.isHidden = narrow && !queries.isRunning
+    }
+
     private func updateStatus() {
+        updateRunAndStop()
         updateChart()
         statusLabel.textColor = .secondaryLabel
         statusLabel.text = queries.status
@@ -865,7 +900,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         let shown = UIAction(title: String(localized: "Shown Rows…"), image: UIImage(systemName: "tablecells"),
                              attributes: queries.source != nil && table.numberOfRows > 0 && !table.isExporting ? [] : .disabled) { [weak self] _ in
             guard let self else { return }
-            table.exportFileName = "result"
+            table.exportFileName = queries.exportName
             table.exportDocument(navigationItem.rightBarButtonItems?.first)
         }
         let byServer = UIMenu(title: String(localized: "All Rows, Run Again by the Server"), options: .displayInline, children: formats.map { title, format, ext in
@@ -1004,19 +1039,25 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     /// The statement run again by the server in a format it makes, into a file to share or save.
     private func export(format: String, extension ext: String) {
         guard queries.canExport, let sql = queries.statement else { return }
-        let file = FileManager.default.temporaryDirectory.appending(path: "result.\(ext)")
+        let file = FileManager.default.temporaryDirectory.appending(path: "\(queries.exportName).\(ext)")
         statusLabel.text = String(localized: "Exporting…")
         Task {
             do {
                 let bytes = try await client.download(sql, format: format, to: file, parameters: parameterValues) { written in
                     // (The export holds the view until it's done: so does this.)
                     Task { @MainActor in
-                        self.statusLabel.text = String(localized: "Exporting… \(ByteCountFormatter.string(fromByteCount: Int64(written), countStyle: .file))")
+                        self.statusLabel.text = String(localized: "Exporting… \(Int64(written).formatted(.byteCount(style: .file)))")
                     }
                 }
-                statusLabel.text = String(localized: "Exported \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)).")
+                statusLabel.text = queries.status
                 let share = UIActivityViewController(activityItems: [file], applicationActivities: nil)
                 share.popoverPresentationController?.sourceItem = navigationItem.rightBarButtonItems?.first
+                // Said once it's saved or shared (not when it's only written for the sheet), the file gone then.
+                share.completionWithItemsHandler = { [weak self] _, completed, _, _ in
+                    self?.statusLabel.text = completed ? String(localized: "Exported \(Int64(bytes).formatted(.byteCount(style: .file))).")
+                        : self?.queries.status
+                    try? FileManager.default.removeItem(at: file)
+                }
                 present(share, animated: true)
             } catch {
                 show(error)

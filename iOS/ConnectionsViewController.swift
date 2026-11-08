@@ -116,9 +116,8 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
         guard let id = dataSource.itemIdentifier(for: indexPath), let endpoint = Connections.shared.endpoints.first(where: { $0.id == id }) else {
             return nil
         }
-        let remove = UIContextualAction(style: .destructive, title: String(localized: "Remove")) { _, _, done in
-            Connections.shared.remove(endpoint)
-            done(true)
+        let remove = UIContextualAction(style: .destructive, title: String(localized: "Delete")) { [weak self] _, _, done in
+            self?.confirmDeleting(endpoint) { done($0) }
         }
         let edit = UIContextualAction(style: .normal, title: String(localized: "Edit.action", defaultValue: "Edit", comment: "Changes a connection (not the Edit menu)")) { [weak self] _, _, done in
             self?.edit(endpoint)
@@ -127,7 +126,20 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
         return UISwipeActionsConfiguration(actions: [remove, edit])
     }
 
-    /// A connection's menu: Connect, Open in New Window (where there can be more than one), Edit, Remove.
+    /// Asked first, as the Mac does: its password, keys and certificate go from the Keychain too.
+    private func confirmDeleting(_ endpoint: CHEndpoint, then done: @escaping (Bool) -> Void) {
+        let alert = UIAlertController(title: String(localized: "Delete “\(endpoint.title)”?"),
+                                      message: String(localized: "Its password, keys and certificate are removed from the Keychain, and its history of queries too."),
+                                      preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: String(localized: "Delete"), style: .destructive) { _ in
+            Connections.shared.remove(endpoint)
+            done(true)
+        })
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel) { _ in done(false) })
+        present(alert, animated: true)
+    }
+
+    /// A connection's menu: Connect, Open in New Window (where there can be more than one), Edit, Delete.
     override func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemsAt indexPaths: [IndexPath],
                                  point: CGPoint) -> UIContextMenuConfiguration? {
         guard let indexPath = indexPaths.first, let id = dataSource.itemIdentifier(for: indexPath),
@@ -144,8 +156,8 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
                 })
             }
             actions.append(UIAction(title: String(localized: "Edit.action", defaultValue: "Edit", comment: "Changes a connection (not the Edit menu)"), image: UIImage(systemName: "pencil")) { _ in self?.edit(endpoint) })
-            actions.append(UIAction(title: String(localized: "Remove"), image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
-                Connections.shared.remove(endpoint)
+            actions.append(UIAction(title: String(localized: "Delete…"), image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
+                self?.confirmDeleting(endpoint) { _ in }
             })
             return UIMenu(children: actions)
         })
@@ -268,6 +280,7 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
         split.setViewController(UINavigationController(rootViewController: query), for: .secondary)
         // On an iPhone: the editor and result first, the schema a tap back.
         split.delegate = query
+        query.split = split
         split.modalPresentationStyle = .fullScreen
         // The window is named for its server (the app switcher shows it) and comes back to it.
         shownEndpoint = endpoint

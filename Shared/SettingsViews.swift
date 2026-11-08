@@ -56,7 +56,8 @@ struct AppearanceSettingsView: View {
     @AppStorage("DarkContentBackground") private var darkContent = false
     @Environment(\.colorScheme) private var colorScheme
 
-    private static let sample = "SELECT country, count() AS visits -- this month\nFROM events\nWHERE event_time >= {since:DateTime} AND url LIKE '%/page/%'\nGROUP BY country ORDER BY visits DESC LIMIT 10"
+    private static let sample = "SELECT country, count() AS visits -- \(String(localized: "this month", comment: "A comment in the sample SQL"))\n"
+        + "FROM events\nWHERE event_time >= {since:DateTime} AND url LIKE '%/page/%'\nGROUP BY country ORDER BY visits DESC LIMIT 10"
 
     var body: some View {
         Form {
@@ -90,7 +91,12 @@ struct AppearanceSettingsView: View {
                     Text("Regular").tag("regular")
                     Text("Spacious").tag("spacious")
                 }
+                #if os(macOS)
                 .pickerStyle(.segmented)
+                #else
+                // (A segmented picker in an iOS form shows no label: what it sets wasn't said.)
+                .pickerStyle(.menu)
+                #endif
                 Toggle("Alternating row backgrounds", isOn: $alternatingRows)
             }
             #if os(iOS)

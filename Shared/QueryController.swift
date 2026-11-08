@@ -498,6 +498,13 @@ final class QueryController {
         } catch {
             guard !Task.isCancelled else { return }
             isRefreshing = false
+            if !shown, !refresh {
+                // Failed before its first rows: the result before it goes (it isn't this one's).
+                source = nil
+                table.dataSource = nil
+                table.columns = []
+                table.reloadData()
+            }
             state = .failed(error)
             if let latest { add(latest) }
             table.sortsRows = true
@@ -834,7 +841,7 @@ final class QueryController {
                 parts.append(String(localized: "first rows in \(Self.seconds(first).formatted(.number.precision(.fractionLength(3)))) s"))
             }
             parts.append(String(localized: "\(Self.seconds(stats.elapsed).formatted(.number.precision(.fractionLength(3)))) s"))
-            if stats.receivedBytes > 0 { parts.append(ByteCountFormatter.string(fromByteCount: Int64(stats.receivedBytes), countStyle: .file)) }
+            if stats.receivedBytes > 0 { parts.append(Int64(stats.receivedBytes).formatted(.byteCount(style: .file))) }
             if stats.reachedLimit || (source.map { $0.result.byteCount >= Self.budget.bytes } ?? false) {
                 parts.append(String(localized: "stopped at the memory limit"))
             }
@@ -846,13 +853,14 @@ final class QueryController {
             if let scriptFailure, let scriptStep {
                 parts.append(String(localized: "Statement \(scriptFailure + 1) of \(scriptStep.count) failed"))
             } else {
-                parts.append(rows > 0 ? String(localized: "Failed after \(rows.formatted()) rows") : String(localized: "Failed"))
+                parts.append(rows == 0 ? String(localized: "Failed") : rows == 1 ? String(localized: "Failed after 1 row")
+                    : String(localized: "Failed after \(rows.formatted()) rows"))
             }
         case .cancelled:
             if let scriptStep, scriptStep.index < scriptStep.count - 1 {
                 parts.append(String(localized: "Stopped at statement \(scriptStep.index + 1) of \(scriptStep.count)"))
             } else {
-                parts.append(String(localized: "Cancelled after \(rows.formatted()) rows"))
+                parts.append(rows == 1 ? String(localized: "Cancelled after 1 row") : String(localized: "Cancelled after \(rows.formatted()) rows"))
             }
         }
         if let scriptStep, isRunning {
@@ -872,8 +880,17 @@ final class QueryController {
         return parts.joined(separator: " · ")
     }
 
+    /// An export's file name: the server view's or the connection's, and when (not "result").
+    var exportName: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH.mm.ss"
+        let base = (view?.title ?? client.endpoint.title).replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        return "\(base) \(formatter.string(from: Date()))"
+    }
+
     private func rowsText(_ rows: Int) -> String {
-        guard !searchText.isEmpty else { return String(localized: "\(rows.formatted()) rows") }
+        guard !searchText.isEmpty else { return rows == 1 ? String(localized: "1 row") : String(localized: "\(rows.formatted()) rows") }
         return table.isSearchingRows ? String(localized: "Searching…") : String(localized: "\(table.numberOfRows.formatted()) of \(rows.formatted()) rows")
     }
 
@@ -884,7 +901,7 @@ final class QueryController {
     }
 
     static func bytes(_ count: Int) -> String {
-        ByteCountFormatter.string(fromByteCount: Int64(count), countStyle: .memory)
+        Int64(count).formatted(.byteCount(style: .memory))
     }
 
     static func seconds(_ duration: Duration) -> Double {

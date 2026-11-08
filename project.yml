@@ -32,7 +32,13 @@ targets:
   Granule:
     type: application
     platform: macOS
-    sources: [Mac, Shared]
+    # Synchronized folders (Xcode 16+): a file added or removed is in the project at once,
+    # with no generating again (only project.yml's own changes need that).
+    sources:
+      - path: Mac
+        type: syncedFolder
+      - path: Shared
+        type: syncedFolder
     dependencies:
       - package: Gingham
         product: Gingham
@@ -88,7 +94,11 @@ targets:
   Granule iOS:
     type: application
     platform: iOS
-    sources: [iOS, Shared]
+    sources:
+      - path: iOS
+        type: syncedFolder
+      - path: Shared
+        type: syncedFolder
     dependencies:
       - package: Gingham
         product: Gingham

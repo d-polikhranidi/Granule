@@ -1071,9 +1071,10 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
                 let share = UIActivityViewController(activityItems: [file], applicationActivities: nil)
                 share.popoverPresentationController?.sourceItem = navigationItem.rightBarButtonItems?.first
                 // Said once it's saved or shared (not when it's only written for the sheet), the file gone then.
-                share.completionWithItemsHandler = { [weak self] _, completed, _, _ in
-                    self?.statusLabel.text = completed ? String(localized: "Exported \(Int64(bytes).formatted(.byteCount(style: .file))).")
-                        : self?.queries.status
+                // (Self strongly, as the task around it: the sheet goes once it's done.)
+                share.completionWithItemsHandler = { _, completed, _, _ in
+                    self.statusLabel.text = completed ? String(localized: "Exported \(Int64(bytes).formatted(.byteCount(style: .file))).")
+                        : self.queries.status
                     try? FileManager.default.removeItem(at: file)
                 }
                 present(share, animated: true)

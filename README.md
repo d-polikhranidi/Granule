@@ -72,7 +72,7 @@ The table comes from [Gingham](https://github.com/digitalglobeby/Gingham), and i
 
 ## Privacy
 
-The app collects nothing and has no tracking. It talks only to the servers you add. Connections are kept on your device, and their passwords and keys are kept in the Keychain.
+The app collects nothing and has no tracking. It talks only to the servers you add. Connections are kept on your device, and their passwords and keys are kept in the Keychain. See [PRIVACY.md](PRIVACY.md).
 
 ## License
 

@@ -144,7 +144,15 @@ public final class CHClient: Sendable {
         guard let base = baseURL else { throw CHClientError.badURL }
         var ping = URLRequest(url: base.appending(path: "ping"))
         ping.timeoutInterval = timeout
-        let (data, response) = try await session.data(for: ping)
+        // The first request to a server on the local network brings up the system's Local Network
+        // alert, and the system may fail the request at once, before the user answers (TN3179): the
+        // ping waits for the way to it instead, within the timeout.
+        let waiting = Self.configuration(timeout: timeout)
+        waiting.waitsForConnectivity = true
+        waiting.timeoutIntervalForResource = timeout
+        let pinging = URLSession(configuration: waiting, delegate: sessionDelegate, delegateQueue: nil)
+        defer { pinging.finishTasksAndInvalidate() }
+        let (data, response) = try await pinging.data(for: ping)
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             throw CHClientError.unexpectedResponse(status: (response as? HTTPURLResponse)?.statusCode ?? 0,
                                                    text: String(decoding: data.prefix(500), as: UTF8.self))

@@ -49,6 +49,9 @@ targets:
         NSPrincipalClass: NSApplication
         NSHumanReadableCopyright: "© 2026 Dalis Polikhranidi"
         ITSAppUsesNonExemptEncryption: false
+        # macOS 15 and later ask before a connection to the local network, as iOS does
+        # (its Russian in Shared/InfoPlist.xcstrings).
+        NSLocalNetworkUsageDescription: Connects to the ClickHouse servers you add on your local network.
         # Servers the user names, over HTTP too (a server on the local
         # network, a test one): TLS is the user's choice per connection.
         NSAppTransportSecurity:

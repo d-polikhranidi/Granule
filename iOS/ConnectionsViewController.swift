@@ -120,7 +120,7 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
             Connections.shared.remove(endpoint)
             done(true)
         }
-        let edit = UIContextualAction(style: .normal, title: String(localized: "Edit")) { [weak self] _, _, done in
+        let edit = UIContextualAction(style: .normal, title: String(localized: "Edit.action", defaultValue: "Edit", comment: "Changes a connection (not the Edit menu)")) { [weak self] _, _, done in
             self?.edit(endpoint)
             done(true)
         }
@@ -143,7 +143,7 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
                     Self.openInNewWindow(endpoint)
                 })
             }
-            actions.append(UIAction(title: String(localized: "Edit"), image: UIImage(systemName: "pencil")) { _ in self?.edit(endpoint) })
+            actions.append(UIAction(title: String(localized: "Edit.action", defaultValue: "Edit", comment: "Changes a connection (not the Edit menu)"), image: UIImage(systemName: "pencil")) { _ in self?.edit(endpoint) })
             actions.append(UIAction(title: String(localized: "Remove"), image: UIImage(systemName: "trash"), attributes: .destructive) { _ in
                 Connections.shared.remove(endpoint)
             })

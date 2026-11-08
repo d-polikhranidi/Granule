@@ -6,6 +6,7 @@ import PackageDescription
 // and no table engine here.
 let package = Package(
     name: "ClickHouseCore",
+    defaultLocalization: "en",
     platforms: [.macOS(.v14), .iOS(.v17)],
     products: [
         .library(name: "ClickHouseCore", targets: ["ClickHouseCore"]),
@@ -29,6 +30,7 @@ let package = Package(
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
+            resources: [.process("Localizable.xcstrings")],
             swiftSettings: [.enableUpcomingFeature("ApproachableConcurrency")]
         ),
         // OpenSSH's KDF for keys with a passphrase (bcrypt_pbkdf) in C: fast in debug builds too.
@@ -47,6 +49,8 @@ let package = Package(
         .target(
             name: "ClickHouseCore",
             dependencies: ["CHDecode", "CHZstd"],
+            // Its messages in English and Russian (`bundle: .module`).
+            resources: [.process("Localizable.xcstrings")],
             swiftSettings: [.enableUpcomingFeature("ApproachableConcurrency")]
         ),
         // The loops over every value of a result in C: fast in debug builds too.

@@ -256,7 +256,7 @@ extension CHClient {
             let tables = try await result("SELECT name FROM system.tables WHERE database = \(databaseSQL)").rows().compactMap(\.first)
             if !tables.contains(write.table.name.name) {
                 return [CHSQL.Problem(range: write.table.name.range,
-                                      message: String(localized: "There's no table \(write.table.name.name) in this database."),
+                                      message: String(localized: "There's no table \(write.table.name.name) in this database.", bundle: .module),
                                       suggestions: Self.closest(write.table.name.name, among: tables), isFromServer: true)]
             }
             // A view or a table without columns in the list: nothing more to tell.
@@ -266,7 +266,7 @@ extension CHClient {
         let byName = Dictionary(columns.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         var problems: [CHSQL.Problem] = []
         func noColumn(_ column: CHWriteStatement.Name) {
-            problems.append(CHSQL.Problem(range: column.range, message: String(localized: "There's no column \(column.name) in \(write.table.name.name)."),
+            problems.append(CHSQL.Problem(range: column.range, message: String(localized: "There's no column \(column.name) in \(write.table.name.name).", bundle: .module),
                                           suggestions: Self.closest(column.name, among: names), isFromServer: true))
         }
         /// The analyzer's verdict on expressions over the table: `SELECT … FROM table WHERE …`.
@@ -292,7 +292,7 @@ extension CHClient {
                 }
                 if known.kind == "MATERIALIZED" || known.kind == "ALIAS" {
                     problems.append(CHSQL.Problem(range: column.range,
-                                                  message: String(localized: "\(column.name) is an \(known.kind) column: its values are computed, not inserted."),
+                                                  message: String(localized: "\(column.name) is an \(known.kind) column: its values are computed, not inserted.", bundle: .module),
                                                   isFromServer: true))
                 }
             }
@@ -302,7 +302,7 @@ extension CHClient {
             let expected = listed?.count ?? (hasEphemeral ? nil : columns.filter { $0.kind != "MATERIALIZED" && $0.kind != "ALIAS" }.count)
             if let expected {
                 for (range, count) in rows where count != expected {
-                    problems.append(CHSQL.Problem(range: range, message: String(localized: "This row has \(count) values: the insert takes \(expected)."),
+                    problems.append(CHSQL.Problem(range: range, message: String(localized: "This row has \(count) values: the insert takes \(expected).", bundle: .module),
                                                   isFromServer: true))
                 }
             }
@@ -312,7 +312,7 @@ extension CHClient {
                     let described = try await result("DESCRIBE (\n\(text.substring(with: select))\n)", settings: settings)
                     if let expected, described.rowCount != expected {
                         problems.append(CHSQL.Problem(range: NSRange(location: select.location, length: min(6, select.length)),
-                                                      message: String(localized: "The SELECT gives \(described.rowCount) columns: the insert takes \(expected)."),
+                                                      message: String(localized: "The SELECT gives \(described.rowCount) columns: the insert takes \(expected).", bundle: .module),
                                                       isFromServer: true))
                     }
                 } catch let error as CHServerError {
@@ -336,24 +336,24 @@ extension CHClient {
                         }
                         if known.isKey {
                             problems.append(CHSQL.Problem(range: column.range,
-                                                          message: String(localized: "\(column.name) is in the table's key: it can't be updated."),
+                                                          message: String(localized: "\(column.name) is in the table's key: it can't be updated.", bundle: .module),
                                                           isFromServer: true))
                         } else if known.kind == "MATERIALIZED" || known.kind == "ALIAS" {
                             problems.append(CHSQL.Problem(range: column.range,
-                                                          message: String(localized: "\(column.name) is an \(known.kind) column: it can't be updated."),
+                                                          message: String(localized: "\(column.name) is an \(known.kind) column: it can't be updated.", bundle: .module),
                                                           isFromServer: true))
                         }
                     }
                     if good { try await analyze(values: assignments.map(\.1), condition: condition) }
                 case .addColumn(let column, let ifNotExists):
                     if byName[column.name] != nil, !ifNotExists {
-                        problems.append(CHSQL.Problem(range: column.range, message: String(localized: "\(write.table.name.name) has a column \(column.name) already."),
+                        problems.append(CHSQL.Problem(range: column.range, message: String(localized: "\(write.table.name.name) has a column \(column.name) already.", bundle: .module),
                                                       isFromServer: true))
                     }
                 case .column(_, let column, let ifExists, let renamed):
                     if byName[column.name] == nil, !ifExists { noColumn(column) }
                     if let renamed, byName[renamed.name] != nil {
-                        problems.append(CHSQL.Problem(range: renamed.range, message: String(localized: "\(write.table.name.name) has a column \(renamed.name) already."),
+                        problems.append(CHSQL.Problem(range: renamed.range, message: String(localized: "\(write.table.name.name) has a column \(renamed.name) already.", bundle: .module),
                                                       isFromServer: true))
                     }
                 case .other:

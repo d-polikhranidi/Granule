@@ -791,7 +791,7 @@ final class QueryController {
             return rows > 0 ? String(localized: "Running · \(rows.formatted()) rows · \(seconds) s") : String(localized: "Running · \(seconds) s")
         case .finished(let stats):
             let seconds = Self.seconds(stats.elapsed).formatted(.number.precision(.fractionLength(2)))
-            return "\(rowsText(rows)) · \(seconds) s"
+            return String(localized: "\(rowsText(rows)) · \(seconds) s")
         case .failed:
             return String(localized: "Failed")
         case .cancelled:

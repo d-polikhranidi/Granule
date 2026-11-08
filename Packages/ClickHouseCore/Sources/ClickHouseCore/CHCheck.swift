@@ -36,18 +36,18 @@ extension CHSQL {
                 let quote = value.utf16.first ?? 0
                 if !Self.isClosed(value, quote: quote) {
                     problems.append(Problem(range: token.range, message: token.kind == .string
-                        ? String(localized: "This string has no closing quote.") : String(localized: "This name has no closing quote.")))
+                        ? String(localized: "This string has no closing quote.", bundle: .module) : String(localized: "This name has no closing quote.", bundle: .module)))
                 }
             case .comment:
                 if value.hasPrefix("/*"), !value.hasSuffix("*/") || value.count < 4 {
                     problems.append(Problem(range: NSRange(location: token.range.location, length: 2),
-                                            message: String(localized: "This comment isn't closed (*/).")))
+                                            message: String(localized: "This comment isn't closed (*/).", bundle: .module)))
                 }
             case .parameter:
                 if !value.hasSuffix("}") {
-                    problems.append(Problem(range: token.range, message: String(localized: "This parameter has no closing brace.")))
+                    problems.append(Problem(range: token.range, message: String(localized: "This parameter has no closing brace.", bundle: .module)))
                 } else if !value.contains(":") {
-                    problems.append(Problem(range: token.range, message: String(localized: "A parameter is {name:Type}: this one has no type.")))
+                    problems.append(Problem(range: token.range, message: String(localized: "A parameter is {name:Type}: this one has no type.", bundle: .module)))
                 }
             case .punctuation:
                 guard let unit = value.utf16.first, value.utf16.count == 1 else { continue }
@@ -58,7 +58,7 @@ extension CHSQL {
                     if let last = open.last, last.0 == opener {
                         open.removeLast()
                     } else {
-                        problems.append(Problem(range: token.range, message: String(localized: "This bracket closes none.")))
+                        problems.append(Problem(range: token.range, message: String(localized: "This bracket closes none.", bundle: .module)))
                     }
                 default: break
                 }
@@ -67,8 +67,8 @@ extension CHSQL {
             }
         }
         for (unit, range) in open {
-            problems.append(Problem(range: range, message: unit == 0x28 ? String(localized: "This bracket isn't closed: no ).")
-                                    : String(localized: "This bracket isn't closed: no ].")))
+            problems.append(Problem(range: range, message: unit == 0x28 ? String(localized: "This bracket isn't closed: no ).", bundle: .module)
+                                    : String(localized: "This bracket isn't closed: no ].", bundle: .module)))
         }
         return problems
     }
@@ -193,7 +193,7 @@ extension CHClient {
             }
             // A place in the request says nothing to the user (its offset counts the prefix too).
             rest = rest.replacingOccurrences(of: #" at position \d+"#, with: "", options: .regularExpression)
-            message = near.isEmpty ? String(localized: "Syntax error.") : String(localized: "Syntax error at \(near).")
+            message = near.isEmpty ? String(localized: "Syntax error.", bundle: .module) : String(localized: "Syntax error at \(near).", bundle: .module)
             if !rest.isEmpty { message += " " + Self.shortened(rest) }
         }
         // "… `countr` in scope SELECT …. Maybe you meant: ['country']." (24.3+), or older servers':

@@ -1658,7 +1658,7 @@ final class QueryLibraryController: NSViewController, GHTableViewDataSource, GHT
         case .saved: [
             .column(GHTableColumn("name", title: String(localized: "Name"), width: 200, minWidth: 80, maxWidth: 600)),
             .column(GHTableColumn("sql", title: String(localized: "Statement"), width: 380, minWidth: 120, maxWidth: 4_000)),
-            .column(GHTableColumn("date", title: String(localized: "Saved"), width: 150, format: .date(includesTime: true))),
+            .column(GHTableColumn("date", title: String(localized: "Saved.date", defaultValue: "Saved", comment: "When a query was saved"), width: 150, format: .date(includesTime: true))),
         ]
         case .history: [
             .column(GHTableColumn("date", title: String(localized: "Run"), width: 150, format: .date(includesTime: true))),

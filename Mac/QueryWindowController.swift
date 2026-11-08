@@ -141,6 +141,18 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         window.contentViewController = split
         window.setContentSize(NSSize(width: 1280, height: 820))
         if !window.setFrameUsingName(window.frameAutosaveName) { window.center() }
+        #if DEBUG
+        // `-ViewerWindowSize 1440x900`: the window at that size (the App Store's screenshots), at the screen's top left.
+        if let size = UserDefaults.standard.string(forKey: "ViewerWindowSize")?.split(separator: "x").compactMap({ Double($0) }),
+           size.count == 2, let screen = NSScreen.main {
+            let visible = screen.visibleFrame
+            window.setFrame(NSRect(x: visible.minX, y: visible.maxY - size[1], width: size[0], height: size[1]), display: false)
+        }
+        // `-ViewerInspector hidden`: the inspector closed (a screenshot without it), after the split's autosave.
+        if UserDefaults.standard.string(forKey: "ViewerInspector") == "hidden" {
+            DispatchQueue.main.async { [weak self] in self?.inspectorItem?.isCollapsed = true }
+        }
+        #endif
 
         let toolbar = NSToolbar(identifier: "Query")
         toolbar.delegate = self

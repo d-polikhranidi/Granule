@@ -14,9 +14,9 @@ final class Connections {
     static let shared = Connections()
 
     #if DEBUG
-    /// `-ViewerForm testfail` and `ssh` run on a list and Keychain entries of their own (the
+    /// `-ViewerForm testfail`, `ssh` and `playground` run on a list and Keychain entries of their own (the
     /// user's aren't touched, and nothing made by another build is read).
-    static let isChecking = ["testfail", "ssh"].contains(UserDefaults.standard.string(forKey: "ViewerForm"))
+    static let isChecking = ["testfail", "ssh", "playground"].contains(UserDefaults.standard.string(forKey: "ViewerForm"))
         || UserDefaults.standard.string(forKey: "ViewerImport") != nil
     private static let key = isChecking ? "ConnectionsForChecks" : "Connections"
     #else
@@ -65,6 +65,17 @@ final class Connections {
 
     /// Whether the connection is in the list (not removed, not a server opened without saving it).
     func keeps(_ id: UUID) -> Bool { endpoints.contains { $0.id == id } }
+
+    /// ClickHouse's public playground in the list, offered while it's empty: a server to try
+    /// the app on (play.clickhouse.com, the user `explorer` without a password, read only).
+    /// The one there already if it is.
+    func addPlayground() -> CHEndpoint {
+        if let there = endpoints.first(where: { $0.host == "play.clickhouse.com" && $0.user == "explorer" }) { return there }
+        let playground = CHEndpoint(name: uniqueName(String(localized: "ClickHouse Playground"), except: nil), host: "play.clickhouse.com",
+                                    port: 443, isSecure: true, user: "explorer", isReadOnly: true)
+        save(playground, password: "")
+        return playground
+    }
 
     /// Everything kept for a connection: its password, SSH secret and client certificate,
     /// its windows' places and editors' texts (the defaults named with its id), its history.

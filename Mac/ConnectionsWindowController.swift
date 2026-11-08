@@ -35,14 +35,13 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         window.setFrameAutosaveName("Connections")
         if !window.setFrameUsingName("Connections") { window.center() }
         Connections.shared.onChange.append { [weak self] in
-            guard let self, !isSaving else { return }
+            guard let self else { return }
+            form.listIsEmpty = endpoints.isEmpty
+            guard !isSaving else { return }
             reloadList()
         }
-        if endpoints.isEmpty {
-            var local = CHEndpoint(name: String(localized: "Local server"))
-            local.nameIsSuggested = true
-            Connections.shared.save(local, password: "")
-        }
+        // An empty list (the first launch) offers a new connection and the public playground.
+        form.listIsEmpty = endpoints.isEmpty
         list.reloadData()
         list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         #if DEBUG
@@ -50,6 +49,10 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         // connection made for it (removed after), through the form's own actions.
         if UserDefaults.standard.string(forKey: "ViewerForm") == "testfail" {
             Task { await checkFormForTesting() }
+        }
+        // `-ViewerForm playground`: the empty list's Try the Public Playground, then its window.
+        if UserDefaults.standard.string(forKey: "ViewerForm") == "playground" {
+            Task { await checkPlaygroundForTesting() }
         }
         // `-ViewerForm ssh`: the form's SSH rows shown (not saved), and the window's number.
         if UserDefaults.standard.string(forKey: "ViewerForm") == "ssh" {
@@ -109,6 +112,7 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
             test: { [weak self] in self?.test(nil) },
             connect: { [weak self] in self?.connectClicked(nil) },
             new: { [weak self] in self?.addConnection(nil) },
+            playground: { [weak self] in self?.addPlayground() },
             delete: { [weak self] in self?.deleteSelected(nil) },
             chooseAuthority: { [weak self] in self?.chooseAuthority() },
             chooseCertificate: { [weak self] in self?.chooseCertificate() },
@@ -302,6 +306,14 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         Connections.shared.save(endpoint, password: "")
         select(endpoint.id)
         form.focusURL += 1
+    }
+
+    /// The public playground added, selected and connected to.
+    private func addPlayground() {
+        save()
+        let playground = Connections.shared.addPlayground()
+        select(playground.id)
+        connectClicked(nil)
     }
 
     @objc private func duplicate(_ sender: Any?) {
@@ -670,6 +682,28 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
     }
 
     #if DEBUG
+    private func checkPlaygroundForTesting() async {
+        func check(_ name: String, _ passed: Bool) {
+            FileHandle.standardError.write(Data("VIEWER-CHECK \(passed ? "pass" : "FAIL") \(name): «\(form.statusSummary.prefix(80))»\n".utf8))
+        }
+        try? await Task.sleep(for: .seconds(1))
+        check("an empty list offers the playground", form.listIsEmpty)
+        form.actions.playground()
+        for _ in 0..<150 where !NSApp.windows.contains(where: { $0.windowController is QueryWindowController && $0.isVisible }) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let window = NSApp.windows.first { $0.windowController is QueryWindowController && $0.isVisible }
+        check("its window opened", window != nil)
+        check("one read-only connection to play.clickhouse.com as explorer",
+              endpoints.count == 1 && endpoints[0].host == "play.clickhouse.com" && endpoints[0].user == "explorer" && endpoints[0].isReadOnly)
+        check("asked again, it isn't added twice", Connections.shared.addPlayground().id == endpoints.first?.id && endpoints.count == 1)
+        if let window { FileHandle.standardError.write(Data("VIEWER-PLAYGROUND \(window.windowNumber)\n".utf8)) }
+        try? await Task.sleep(for: .seconds(4))
+        NSApp.windows.filter { $0.windowController is QueryWindowController }.forEach { $0.close() }
+        for endpoint in endpoints { Connections.shared.remove(endpoint) }
+        NSApp.terminate(nil)
+    }
+
     private func checkFormForTesting() async {
         guard let window else { return }
         func check(_ name: String, _ passed: Bool) {
@@ -682,6 +716,11 @@ final class ConnectionsWindowController: NSWindowController, NSWindowDelegate, N
         }
         try? await Task.sleep(for: .seconds(1))
         FileHandle.standardError.write(Data("VIEWER-WINDOW \(window.windowNumber)\n".utf8))
+        check("an empty list offers the playground", form.listIsEmpty && form.id == nil)
+        FileHandle.standardError.write(Data("VIEWER-EMPTY \(window.windowNumber)\n".utf8))
+        try? await Task.sleep(for: .seconds(1.5))
+        // A connection there already, its name taken.
+        Connections.shared.save(CHEndpoint(name: "Local server"), password: "")
         addConnection(nil)
         check("a new connection's name is the field's prompt, the field empty", form.name.isEmpty && form.namePrompt == String(localized: "New server"))
         form.name = "Local server"
@@ -768,6 +807,7 @@ final class ConnectionForm {
         var test: () -> Void = {}
         var connect: () -> Void = {}
         var new: () -> Void = {}
+        var playground: () -> Void = {}
         var delete: () -> Void = {}
         var chooseAuthority: () -> Void = {}
         var chooseCertificate: () -> Void = {}
@@ -779,6 +819,8 @@ final class ConnectionForm {
 
     /// The connection shown (`nil`: none selected).
     var id: UUID?
+    /// No connections at all: the playground is offered.
+    var listIsEmpty = false
     var url = ""
     var name = ""
     var environment: CHEnvironment?
@@ -897,7 +939,17 @@ struct ConnectionFormView: View {
     @FocusState private var urlFocused: Bool
 
     var body: some View {
-        if form.id == nil {
+        if form.id == nil, form.listIsEmpty {
+            ContentUnavailableView {
+                Label("No Connections", systemImage: "server.rack")
+            } description: {
+                Text("Add a ClickHouse server: a URL pasted into a new connection fills it in. Or try the app on ClickHouse's public playground, read only.")
+            } actions: {
+                Button("New Connection") { form.actions.new() }
+                    .buttonStyle(.borderedProminent)
+                Button("Try the Public Playground") { form.actions.playground() }
+            }
+        } else if form.id == nil {
             ContentUnavailableView {
                 Label("No Connection Selected", systemImage: "server.rack")
             } description: {

@@ -74,11 +74,7 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
         }
         Connections.shared.onChange.append { [weak self] in self?.reload() }
         collectionView.dragDelegate = self
-        if Connections.shared.endpoints.isEmpty {
-            var local = CHEndpoint(name: String(localized: "Local server"))
-            local.nameIsSuggested = true
-            Connections.shared.save(local, password: "")
-        }
+        // An empty list (the first launch) offers a new connection and the public playground.
         reload()
     }
 
@@ -92,11 +88,17 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
             var empty = UIContentUnavailableConfiguration.empty()
             empty.image = UIImage(systemName: "server.rack")
             empty.text = String(localized: "No Connections")
-            empty.secondaryText = String(localized: "Add a ClickHouse server. A URL pasted into the form fills it in.")
+            empty.secondaryText = String(localized: "Add a ClickHouse server: a URL pasted into the form fills it in. Or try the app on ClickHouse's public playground, read only.")
             var button = UIButton.Configuration.borderedProminent()
             button.title = String(localized: "Add Connection")
             empty.button = button
             empty.buttonProperties.primaryAction = UIAction { [weak self] _ in self?.edit(nil) }
+            var playground = UIButton.Configuration.plain()
+            playground.title = String(localized: "Try the Public Playground")
+            empty.secondaryButton = playground
+            empty.secondaryButtonProperties.primaryAction = UIAction { [weak self] _ in
+                self?.open(Connections.shared.addPlayground(), password: "")
+            }
             contentUnavailableConfiguration = empty
         } else {
             contentUnavailableConfiguration = nil

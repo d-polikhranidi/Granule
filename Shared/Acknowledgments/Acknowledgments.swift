@@ -148,7 +148,7 @@ struct AcknowledgmentView: View {
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 10) {
                 #if os(macOS)
                 Text(item.name)
                     .font(.title2.bold())
@@ -162,13 +162,11 @@ struct AcknowledgmentView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(item.texts, id: \.self) { text in
-                    let paragraphs = Acknowledgment.paragraphs(of: text)
                     Text(text.heading)
                         .font(.headline)
                         .padding(.top, 12)
-                    // (zstd's text starts with its title.)
-                    ForEach(Array(paragraphs.enumerated()).filter { $0.offset > 0 || $0.element != text.heading }, id: \.offset) { paragraph in
-                        Text(paragraph.element)
+                    ForEach(Self.paragraphs(of: text)) { paragraph in
+                        Text(paragraph.text)
                             .font(.callout)
                     }
                 }
@@ -182,5 +180,19 @@ struct AcknowledgmentView: View {
         .navigationTitle(item.name)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+    }
+
+    private struct Paragraph: Identifiable {
+        /// Its text's and its place: the NOTICE's paragraphs aren't the license's (with the
+        /// offset alone, the license showed the NOTICE again).
+        let id: String
+        let text: String
+    }
+
+    /// A text's paragraphs, without its title where it starts with it (zstd's).
+    private static func paragraphs(of part: Acknowledgment.Part) -> [Paragraph] {
+        Acknowledgment.paragraphs(of: part).enumerated()
+            .filter { $0.offset > 0 || $0.element != part.heading }
+            .map { Paragraph(id: "\(part.resource) \($0.offset)", text: $0.element) }
     }
 }

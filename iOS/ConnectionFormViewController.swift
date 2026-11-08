@@ -19,7 +19,9 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
     private let databaseField = UITextField()
     private let readOnlySwitch = UISwitch()
     // (In `CHCompression.allCases`' order.)
-    private let compressionControl = UISegmentedControl(items: [String(localized: "Automatic"), "LZ4", "ZSTD", String(localized: "None")])
+    private let compressionControl = UISegmentedControl(items: [String(localized: "Automatic.short", defaultValue: "Automatic",
+                                                                                      comment: "Compression chosen by the app, in a narrow segment"),
+                                                                    "LZ4", "ZSTD", String(localized: "None")])
     private let fingerprintField = UITextField()
     private let statusLabel = UILabel()
     /// The whole of a long message (the status shows its first paragraph).
@@ -65,6 +67,10 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
         func field(_ field: UITextField, _ placeholder: String, keyboard: UIKeyboardType = .default) -> UITextField {
             field.placeholder = placeholder
             field.borderStyle = .roundedRect
+            // The cards' color in dark mode too (a rounded field's own is black there), the text as large as the user's.
+            field.backgroundColor = .secondarySystemGroupedBackground
+            field.font = .preferredFont(forTextStyle: .body)
+            field.adjustsFontForContentSizeCategory = true
             field.autocapitalizationType = .none
             field.autocorrectionType = .no
             field.spellCheckingType = .no
@@ -76,7 +82,15 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
             let label = UILabel()
             label.text = title
             label.font = .preferredFont(forTextStyle: .subheadline)
+            label.adjustsFontForContentSizeCategory = true
+            label.numberOfLines = 0
             label.textColor = .secondaryLabel
+            // VoiceOver names the control by its row (a field says only its text, a button its value).
+            label.isAccessibilityElement = false
+            control.accessibilityLabel = title
+            if let button = control as? UIButton {
+                control.accessibilityValueBlock = { [weak button] in button?.configuration?.title ?? button?.currentTitle }
+            }
             let stack = UIStackView(arrangedSubviews: [label, control])
             stack.axis = .vertical
             stack.spacing = 4
@@ -86,8 +100,16 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
             let label = UILabel()
             label.text = title
             label.numberOfLines = 0
+            label.font = .preferredFont(forTextStyle: .body)
+            label.adjustsFontForContentSizeCategory = true
+            label.isAccessibilityElement = false
+            control.accessibilityLabel = title
+            // The switch keeps its size; a long label wraps.
+            control.setContentCompressionResistancePriority(.required, for: .horizontal)
+            control.setContentHuggingPriority(.required, for: .horizontal)
             let stack = UIStackView(arrangedSubviews: [label, control])
             stack.alignment = .center
+            stack.spacing = 8
             return stack
         }
         passwordField.isSecureTextEntry = true

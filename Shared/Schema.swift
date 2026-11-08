@@ -28,7 +28,7 @@ nonisolated struct Schema {
         var detail: String {
             var parts: [String] = []
             if let rows { parts.append(rows.formatted(.number.notation(.compactName))) }
-            if let bytes, bytes > 0 { parts.append(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)) }
+            if let bytes, bytes > 0 { parts.append(Int64(bytes).formatted(.byteCount(style: .file))) }
             return parts.joined(separator: " · ")
         }
     }
@@ -48,7 +48,7 @@ nonisolated struct Schema {
         /// The column's size compressed and its ratio, when it has data.
         var sizeText: String? {
             guard compressedBytes > 0 else { return nil }
-            let size = ByteCountFormatter.string(fromByteCount: Int64(compressedBytes), countStyle: .file)
+            let size = Int64(compressedBytes).formatted(.byteCount(style: .file))
             let ratio = Double(uncompressedBytes) / Double(compressedBytes)
             return "\(size) · ×\(ratio.formatted(.number.precision(.fractionLength(1))))"
         }

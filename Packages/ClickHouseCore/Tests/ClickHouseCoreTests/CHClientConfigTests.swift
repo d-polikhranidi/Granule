@@ -58,12 +58,13 @@ import Testing
                 - name: staging
                   hostname: staging.example.com
                   secure: true
+                  password: "abc #123" # a hash in a quoted value is the value's
             history_file: ~/.history
             """
         let found = CHClientConfig.connections(in: Data(yaml.utf8))
         #expect(found.map(\.endpoint.host) == ["db1", "ch.example.com", "staging.example.com"])
         #expect(found[1].endpoint.port == 8123 && found[1].nativePort == 9000 && found[1].password == "pa:ss")
-        #expect(found[2].endpoint.isSecure && found[2].endpoint.port == 8443)
+        #expect(found[2].endpoint.isSecure && found[2].endpoint.port == 8443 && found[2].password == "abc #123")
         // A single connection as a mapping.
         let single = CHClientConfig.connections(in: Data("connections_credentials:\n  connection:\n    name: one\n    hostname: h\n".utf8))
         #expect(single.map(\.endpoint.host) == ["h"])

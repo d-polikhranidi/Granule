@@ -49,7 +49,8 @@ enum CellInspector {
     /// The text laid out: JSON (a String or JSON column's), or an array, tuple or map as
     /// ClickHouse writes it, an item a line where it doesn't fit (Copy copies it as it was).
     static func laidOut(_ text: String, type: CHType, columns: Int) -> String? {
-        prettyJSON(text) ?? (CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, type: type, width: columns) : nil)
+        // Arrays, tuples and maps by their type first: a JSON reading of [0.1] writes its digits again.
+        CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, type: type, width: columns) : prettyJSON(text)
     }
 
     /// How many of the editor font's characters fit in a width.

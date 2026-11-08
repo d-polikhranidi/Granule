@@ -557,19 +557,23 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         }
     }
 
-    private var isEstimating = false
+    /// The estimate before a run, if one is asked for: a new run or Stop cancels it.
+    private var estimate: Task<Void, Never>?
 
     /// Before a query the server estimates to read more rows than Settings › Queries allows:
     /// asked first, with a way not to be asked again.
     private func confirmLargeRead(_ sql: String, values: [String: String], then run: @escaping () -> Void) {
-        guard LargeReads.asks, !isEstimating else { return run() }
-        isEstimating = true
+        estimate?.cancel()
+        guard LargeReads.asks else { return run() }
+        let starts = queries.starts
         statusLabel.textColor = .secondaryLabelColor
         statusLabel.stringValue = String(localized: "Estimating the rows it reads…")
-        Task { [weak self] in
+        estimate = Task { [weak self] in
             guard let self else { return }
             let question = await queries.largeReadQuestion(for: sql, parameters: values)
-            isEstimating = false
+            // Another run asked meanwhile, Stop, or something else ran (a view): this one doesn't.
+            guard !Task.isCancelled, queries.starts == starts else { return }
+            estimate = nil
             guard let question else { return run() }
             // Without a window to ask in, nothing runs.
             guard let window else { return }
@@ -708,6 +712,11 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
     }
 
     @objc func stopQuery(_ sender: Any?) {
+        if estimate != nil {
+            estimate?.cancel()
+            estimate = nil
+            updateStatus()
+        }
         queries.cancel()
     }
 
@@ -978,15 +987,18 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
                 messageLabel.stringValue = String(localized: "The first \(Schema.previewRows.formatted()) rows. Show All Rows in the table's menu reads them all.")
                 messageLabel.isHidden = false
             }
-            if case .finished(let stats) = queries.state, let sql = queries.statement, queries.isUsersStatement, !historySaved.contains(stats.queryID) {
-                historySaved.insert(stats.queryID)
-                lastRun = history.add(sql, rows: stats.rows, seconds: QueryController.seconds(stats.elapsed), queryID: stats.queryID)
+            if case .finished(let stats) = queries.state, let sql = queries.statement, queries.isUsersStatement, !historySaved.contains(queries.starts) {
+                // Once a run (a statement with its own FORMAT has no id the log knows: no Query Details for it).
+                historySaved.insert(queries.starts)
+                lastRun = history.add(sql, rows: stats.rows, seconds: QueryController.seconds(stats.elapsed),
+                                      queryID: stats.queryID.isEmpty ? nil : stats.queryID)
             }
         }
         window?.toolbar?.validateVisibleItems()
     }
 
-    private var historySaved = Set<String>()
+    /// The runs (`QueryController.starts`) already in the history.
+    private var historySaved = Set<Int>()
     /// The last statement of the user's that finished here: Query Details shows it.
     private var lastRun: QueryHistory.Entry?
 
@@ -1473,7 +1485,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
 
     @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
-        case #selector(stopQuery(_:)): queries.isRunning
+        case #selector(stopQuery(_:)): queries.isRunning || estimate != nil
         case #selector(exportResult(_:)): queries.canExport
         case #selector(exportShownRows(_:)): queries.source != nil && table.numberOfRows > 0 && !table.isExporting
         case #selector(showValue(_:)): queries.source != nil

@@ -21,7 +21,10 @@ public struct CHEstimate: Sendable, Equatable {
 extension CHClient {
     /// The server's estimate of what a query reads, within two seconds (marked as the
     /// viewer's own). `database`: the one names without one are in (the session's).
+    /// A user who may set no settings (readonly = 1) gets no time limit: a query with a scalar
+    /// subquery isn't estimated then (the plan runs it, as names are checked: `check`).
     public func estimate(_ query: String, parameters: [String: String] = [:], database: String? = nil) async throws -> CHEstimate {
+        guard maySetSettings || !CHSQL.mayHaveScalarSubquery(query) else { return CHEstimate(tables: []) }
         var settings = ["default_format": "TSV"]
         if maySetSettings {
             settings["max_execution_time"] = "2"

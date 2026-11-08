@@ -204,7 +204,15 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
     @objc func importFromClient(_ sender: Any?) {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.xml, .yaml], asCopy: true)
         picker.delegate = self
-        present(picker, animated: true)
+        // From wherever the window is (a server's split may be over the list).
+        topPresented.present(picker, animated: true)
+    }
+
+    private var topPresented: UIViewController {
+        var top: UIViewController = self
+        // (Not the picker going away as it hands its file over.)
+        while let presented = top.presentedViewController, !presented.isBeingDismissed { top = presented }
+        return top
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
@@ -214,7 +222,7 @@ final class ConnectionsViewController: UICollectionViewController, UICollectionV
         let summary = Connections.importSummary(of: found, added: added, skipped: skipped)
         let alert = UIAlertController(title: summary.title, message: summary.detail, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: String(localized: "OK"), style: .default))
-        present(alert, animated: true)
+        topPresented.present(alert, animated: true)
     }
 
     private func edit(_ endpoint: CHEndpoint?) {

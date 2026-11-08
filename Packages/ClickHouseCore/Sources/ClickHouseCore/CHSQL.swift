@@ -163,25 +163,36 @@ public enum CHSQL {
         let words = tokens(query).filter { $0.kind != .whitespace && $0.kind != .comment }
         var depth = 0
         var limited = false
+        var selects = 0
         for (index, token) in words.enumerated() {
             let word = text.substring(with: token.range)
             if token.kind == .punctuation {
                 if word == "(" { depth += 1 } else if word == ")" { depth = max(0, depth - 1) }
                 continue
             }
-            guard depth == 0, token.kind == .keyword || token.kind == .identifier else { continue }
+            guard token.kind == .keyword || token.kind == .identifier else { continue }
             let upper = word.uppercased()
+            // Another query in it (a subquery, IN (SELECT …), a CTE, a scalar) or a JOIN reads
+            // what it reads before the LIMIT: all of a table, maybe. (ARRAY JOIN reads no other.)
+            if upper == "SELECT" { selects += 1 }
+            if selects > 1 { return false }
+            if upper == "JOIN", index == 0 || text.substring(with: words[index - 1].range).uppercased() != "ARRAY" { return false }
+            guard depth == 0 else { continue }
             if ["ORDER", "GROUP", "DISTINCT", "OVER", "UNION", "INTERSECT", "EXCEPT"].contains(upper) { return false }
             if upper == "BY", limited { return false }
             if upper == "LIMIT" { limited = true }
-            // An aggregate over the rows: count(), sumIf(), uniqExact(), …
+            // An aggregate over the rows: count(), sumIf(), uniqExact(), stddevSamp(), … (a name
+            // that's only like one asks too, which is the safe side).
             if index + 1 < words.count, text.substring(with: words[index + 1].range) == "(" {
                 let name = word.lowercased()
-                if ["min", "max", "any", "avg", "median", "argmin", "argmax", "corr", "varpop", "stddevpop"].contains(name)
-                    || ["count", "sum", "uniq", "quantile", "group", "topk", "avg", "anylast", "anyheavy", "argmin", "argmax", "min", "max"]
-                        .contains(where: { name.hasPrefix($0) && name != "minus" && !name.hasPrefix("maxim") && !name.hasPrefix("minim") }) {
-                    return false
-                }
+                let aggregates = ["count", "sum", "uniq", "quantile", "median", "group", "topk", "avg", "any", "arg", "min", "max",
+                                  "stddev", "var", "covar", "corr", "entropy", "skew", "kurt", "histogram", "sequence", "windowfunnel",
+                                  "retention", "simplelinearregression", "stochastic", "theilsu", "cramersv", "contingency", "deltasum",
+                                  "sparkbar", "first_value", "last_value", "nth_value", "exponentialmovingaverage", "boundingratio",
+                                  "largesttriangle", "maxintersections", "mannwhitney", "studentttest", "welchttest", "kolmogorov",
+                                  "rankcorr", "approx_top", "categoricalinformationvalue", "meanztest", "intervallengthsum",
+                                  "analysisofvariance", "singlevalueornull", "flamegraph"]
+                if aggregates.contains(where: { name.hasPrefix($0) }) { return false }
             }
         }
         return limited

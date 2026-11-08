@@ -76,8 +76,16 @@ final class StatementChecker {
         }
         if explicit { pending = current.map { [$0] } ?? [] }
         pending.sort { ($0 == current ? 0 : 1, $0.location) < ($1 == current ? 0 : 1, $1.location) }
-        let statements = pending.prefix(explicit ? 1 : Self.automaticLimit).map { (text as NSString).substring(with: $0) }
-            .filter { verdicts[$0] == nil }
+        // A statement after a USE in the text is checked in that database (Run All carries it on).
+        var used: [Int: String] = [:]
+        var database: String?
+        for range in ranges {
+            if let database { used[range.location] = database }
+            if let named = QueryController.usedDatabase((text as NSString).substring(with: range)) { database = named }
+        }
+        let statements = pending.prefix(explicit ? 1 : Self.automaticLimit)
+            .map { (statement: (text as NSString).substring(with: $0), database: used[$0.location]) }
+            .filter { verdicts[$0.statement] == nil }
         guard !statements.isEmpty else { return }
         waiting?.cancel()
         let generation = generation
@@ -86,12 +94,13 @@ final class StatementChecker {
             guard let self, !Task.isCancelled, self.generation == generation else { return }
             self.isChecking = true
             self.onChange()
-            for statement in statements {
+            for (statement, used) in statements {
                 // While typing: names only without scalar subqueries (checking them runs them).
                 let checksNames = explicit || !CHSQL.mayHaveScalarSubquery(statement)
                 let found: [CHSQL.Problem]
                 do {
-                    found = try await client.check(statement, checksNames: checksNames, limit: explicit ? 5 : 1, database: self.database())
+                    found = try await client.check(statement, checksNames: checksNames, limit: explicit ? 5 : 1,
+                                                   database: used ?? self.database())
                 } catch {
                     break
                 }
@@ -116,8 +125,8 @@ final class StatementChecker {
             defer { if let name = CHSQL.createdName(of: statement) { created.insert(name) } }
             guard let verdict = verdicts[statement] else { continue }
             server += verdict.filter { problem in
-                guard !created.isEmpty, let name = problem.range.map((statement as NSString).substring(with:)),
-                      problem.message.localizedCaseInsensitiveContains("table") else { return true }
+                // (By the name it underlines, not by its message's words: those are Russian too.)
+                guard !created.isEmpty, let name = problem.range.map((statement as NSString).substring(with:)) else { return true }
                 return !created.contains(name.trimmingCharacters(in: CharacterSet(charactersIn: "`\"")))
             }.map { problem in
                 EditorProblem(range: problem.range.map { NSRange(location: $0.location + range.location, length: $0.length) },

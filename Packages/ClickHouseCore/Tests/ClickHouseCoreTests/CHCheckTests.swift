@@ -5,14 +5,17 @@ import Testing
 @Suite struct CHLocalCheckTests {
     @Test func queriesThatStopEarlyAreKnown() {
         for sql in ["SELECT * FROM events LIMIT 10", "select a, b from t where x = 1 limit 100 offset 10",
-                    "SELECT * FROM (SELECT * FROM t ORDER BY x) LIMIT 5", "SELECT lower(s) FROM t LIMIT 1",
-                    "WITH (SELECT max(x) FROM t) AS m SELECT * FROM t WHERE x = m LIMIT 3"] {
+                    "SELECT lower(s) FROM t LIMIT 1", "SELECT x, a FROM t ARRAY JOIN arr AS a LIMIT 5"] {
             #expect(CHSQL.stopsEarly(sql), "\(sql)")
         }
         for sql in ["SELECT * FROM events", "SELECT * FROM t ORDER BY x LIMIT 10", "SELECT k, count() FROM t GROUP BY k LIMIT 5",
                     "SELECT DISTINCT k FROM t LIMIT 5", "SELECT * FROM t LIMIT 1 BY k", "SELECT count() FROM t LIMIT 1",
                     "SELECT uniqExact(u) FROM t LIMIT 1", "SELECT sumIf(x, y) FROM t LIMIT 1", "SELECT 1 LIMIT 1 UNION ALL SELECT * FROM t",
-                    "SELECT row_number() OVER (ORDER BY x) FROM t LIMIT 10", "SELECT * FROM t WHERE x IN (SELECT x FROM u LIMIT 10)"] {
+                    "SELECT row_number() OVER (ORDER BY x) FROM t LIMIT 10", "SELECT * FROM t WHERE x IN (SELECT x FROM u LIMIT 10)",
+                    // Reading all of a table first: a join, a subquery, a CTE's scalar, an aggregate of any name.
+                    "SELECT * FROM small JOIN huge USING k LIMIT 10", "SELECT * FROM a LEFT ANY JOIN b ON a.k = b.k LIMIT 1",
+                    "SELECT * FROM (SELECT * FROM t ORDER BY x) LIMIT 5", "WITH (SELECT max(x) FROM t) AS m SELECT * FROM t WHERE x = m LIMIT 3",
+                    "SELECT stddevSamp(x) FROM huge LIMIT 1", "SELECT entropy(x), varSamp(y) FROM t LIMIT 1"] {
             #expect(!CHSQL.stopsEarly(sql), "\(sql)")
         }
     }

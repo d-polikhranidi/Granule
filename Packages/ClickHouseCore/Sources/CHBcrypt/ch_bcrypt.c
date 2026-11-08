@@ -3,9 +3,14 @@
 // (EksBlowfish) hashing "OxychromaticBlowfishSwatDynamite" 64 times, mixed
 // into a PBKDF2-like construction over SHA-512.
 
+#define __STDC_WANT_LIB_EXT1__ 1
 #include "ch_bcrypt.h"
 #include <CommonCrypto/CommonDigest.h>
 #include <string.h>
+
+// What the passphrase made goes: memset_s, which the compiler keeps (a plain memset of
+// memory no one reads again it may leave out).
+static void wipe(void *bytes, size_t count) { memset_s(bytes, count, 0, count); }
 #include "blowfish_tables.h"
 
 typedef struct {
@@ -93,7 +98,8 @@ static void bcrypt_hash(const uint8_t *sha2pass, const uint8_t *sha2salt, uint8_
         out[4 * i + 1] = (uint8_t)(words[i] >> 8);
         out[4 * i + 0] = (uint8_t)words[i];
     }
-    memset(&c, 0, sizeof c);
+    wipe(&c, sizeof c);
+    wipe(words, sizeof words);
 }
 
 int ch_bcrypt_pbkdf(const char *pass, size_t passlen, const uint8_t *salt, size_t saltlen,
@@ -112,6 +118,7 @@ int ch_bcrypt_pbkdf(const char *pass, size_t passlen, const uint8_t *salt, size_
         CC_SHA512_Update(&context, salt, (CC_LONG)saltlen);
         CC_SHA512_Update(&context, countsalt, sizeof countsalt);
         CC_SHA512_Final(sha2salt, &context);
+        wipe(&context, sizeof context);
         bcrypt_hash(sha2pass, sha2salt, tmpout);
         memcpy(out, tmpout, sizeof out);
         for (unsigned int round = 1; round < rounds; round++) {
@@ -129,7 +136,9 @@ int ch_bcrypt_pbkdf(const char *pass, size_t passlen, const uint8_t *salt, size_
         }
         keylen -= i;
     }
-    memset(out, 0, sizeof out);
-    memset(sha2pass, 0, sizeof sha2pass);
+    wipe(out, sizeof out);
+    wipe(tmpout, sizeof tmpout);
+    wipe(sha2pass, sizeof sha2pass);
+    wipe(sha2salt, sizeof sha2salt);
     return 0;
 }

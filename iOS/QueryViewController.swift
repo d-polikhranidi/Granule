@@ -187,8 +187,9 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         editorHeight = editor.heightAnchor.constraint(equalToConstant: 150)
         NSLayoutConstraint.activate([
             stack.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            stack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            // In the safe area: on iOS 26 the iPad's sidebar floats over the content's edge.
+            stack.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -4),
             editorHeight,
         ])

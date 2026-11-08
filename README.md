@@ -76,6 +76,6 @@ The app collects nothing and has no tracking. It talks only to the servers you a
 
 ## License
 
-MIT (see [LICENSE](LICENSE)), which also lists the third-party code it includes. Gingham is a separate binary under its own license.
+MIT (see [LICENSE](LICENSE)). [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists the third-party code it includes. Gingham is a separate binary under its own license.
 
 ClickHouse is a trademark of ClickHouse, Inc. Granule is an independent client and isn't affiliated with or endorsed by ClickHouse, Inc.

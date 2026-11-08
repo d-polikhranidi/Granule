@@ -19,22 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This license covers this repository's own code. The app is built with
-Gingham, a separate binary under its own license
-(https://github.com/digitalglobeby/Gingham); Shared/GinghamKey.swift holds a
-free Gingham key that unlocks only the bundle id by.digitalglobe.Clickhouse-Viewer.
-
-Packages/ClickHouseCore/Sources/CHDecode/ryu holds Ryu by Ulf Adams, under the
-Boost Software License 1.0 (its LICENSE-Boost there). The SSH tunnels use
-Apple's swift-nio, swift-nio-ssh and swift-crypto (Apache License 2.0), fetched
-by Swift Package Manager.
-Packages/ClickHouseCore/Sources/CHBcrypt is this repository's own code (MIT):
-OpenBSD's bcrypt_pbkdf written again after its description, for OpenSSH keys
-with a passphrase; Blowfish's initial tables are the hex digits of pi.
-
-Packages/ClickHouseCore/Sources/CHZstd/zstd holds zstd's decompression (zstd 1.5.7
-by Meta Platforms, Inc. and affiliates), under the BSD license in its LICENSE there,
-vendored by Tools/vendor-zstd.sh.

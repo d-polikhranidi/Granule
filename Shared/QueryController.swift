@@ -30,7 +30,29 @@ final class QueryController {
         case cancelled
     }
 
-    private(set) var state = State.idle
+    private(set) var state = State.idle {
+        didSet { updateEmptyState() }
+    }
+
+    /// What the table says while it has no rows: what to do, that rows are coming, or that
+    /// the statement gave none (not "run a statement" under a result of none).
+    private func updateEmptyState() {
+        let text: String? = switch state {
+        case .idle:
+            #if os(macOS)
+            String(localized: "Run a statement (⌘↩) to see its rows here.")
+            #else
+            String(localized: "Run a statement to see its rows here.")
+            #endif
+        case .running: String(localized: "Waiting for the first rows…")
+        case .finished: view == .health ? String(localized: "Nothing needs a look.") : String(localized: "No rows.")
+        case .cancelled: String(localized: "Stopped.")
+        // The error is said over the table.
+        case .failed: nil
+        }
+        if table.emptyStateText != text { table.emptyStateText = text }
+    }
+
     /// The statement shown (as run, after any rewrite for unreadable columns).
     private(set) var statement: String?
     /// Columns shown as their final values (`finalizeAggregation`) or text: their bytes can't be read.
@@ -544,6 +566,8 @@ final class QueryController {
             return
         }
         let source = ResultTableSource(result: result, timeZone: client.serverInfo?.zone ?? .gmt)
+        // Health's findings: their status as a colored tag.
+        source.statusColumn = view == .health ? result.names.firstIndex(of: "status") : nil
         self.source = source
         table.sortsRows = false
         table.sortDescriptors = []

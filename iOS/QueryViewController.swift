@@ -107,6 +107,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
 
         table.delegate = self
         table.allowsMultipleSelection = true
+        // (Then as the statement goes: `QueryController.updateEmptyState`.)
         table.emptyStateText = String(localized: "Run a statement to see its rows here.")
         textOutput.isEditable = false
         textOutput.font = SQLHighlighting.font
@@ -1116,7 +1117,7 @@ final class CellInspectorController: UIViewController {
         let columns = max(16, Int(width / max(1, character)))
         guard columns != laidOutColumns else { return }
         laidOutColumns = columns
-        textView.text = Self.prettyJSON(text) ?? (CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, width: columns) : nil) ?? text
+        textView.text = Self.prettyJSON(text) ?? (CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, type: type, width: columns) : nil) ?? text
     }
 
     static func prettyJSON(_ text: String) -> String? {

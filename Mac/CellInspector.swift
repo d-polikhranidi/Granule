@@ -49,7 +49,7 @@ enum CellInspector {
     /// The text laid out: JSON (a String or JSON column's), or an array, tuple or map as
     /// ClickHouse writes it, an item a line where it doesn't fit (Copy copies it as it was).
     static func laidOut(_ text: String, type: CHType, columns: Int) -> String? {
-        prettyJSON(text) ?? (CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, width: columns) : nil)
+        prettyJSON(text) ?? (CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, type: type, width: columns) : nil)
     }
 
     /// How many of the editor font's characters fit in a width.
@@ -231,7 +231,8 @@ final class ResultInspector: NSViewController, GHTableViewDataSource, GHTableVie
             placeholder.trailingAnchor.constraint(equalTo: safe.trailingAnchor, constant: -20),
         ])
         self.view = view
-        show(nil, row: -1, columnIndex: -1)
+        // Nothing to show yet (`show(nil, …)` would find nothing changed).
+        split.isHidden = true
     }
 
     /// The divider in the middle the first time the inspector shows (then where the user leaves it).

@@ -2,7 +2,9 @@ import Foundation
 
 /// An array, tuple or map as ClickHouse writes it (`[('a','b'),('c','d')]`), laid out to be
 /// read: what fits in `width` characters on one line, the rest an item a line, indented.
-/// Still ClickHouse's syntax (only spaces and line breaks added): it can be copied back.
+/// ClickHouse's syntax with spaces and line breaks added; given the type, a named tuple's
+/// fields are labeled (`(id: 1, name: 'a')`, as ClickHouse doesn't write them), which a
+/// copy of the value shouldn't keep.
 public enum CHValueLayout {
     /// Whether values of the type are laid out (arrays, tuples, maps; inside Nullable or LowCardinality).
     public static func laysOut(_ type: CHType) -> Bool {
@@ -13,12 +15,34 @@ public enum CHValueLayout {
     }
 
     /// The value laid out, or `nil` when it isn't one bracketed value (or is empty).
-    public static func laidOut(_ text: String, width: Int = 60) -> String? {
+    public static func laidOut(_ text: String, type: CHType? = nil, width: Int = 60) -> String? {
         var tokens = Tokens(Array(text.utf8))
-        guard let node = tokens.node(), case .group = node, tokens.isAtEnd else { return nil }
+        guard var node = tokens.node(), case .group = node, tokens.isAtEnd else { return nil }
+        if let type { node = labeled(node, type) }
         var out = ""
         write(node, indent: 0, width: width, to: &out)
         return out
+    }
+
+    /// The value with its named tuples' fields labeled, by the type, all the way down.
+    static func labeled(_ node: Node, _ type: CHType) -> Node {
+        guard case .group(let open, let close, let items) = node else { return node }
+        switch type.base {
+        case .array(let element) where open == UInt8(ascii: "["):
+            return .group(open: open, close: close, items: items.map { $0.map { labeled($0, element) } })
+        case .tuple(let elements) where open == UInt8(ascii: "(") && elements.count == items.count:
+            return .group(open: open, close: close, items: zip(items, elements).map { item, element in
+                let parts = item.map { labeled($0, element.type) }
+                return element.name.map { [.atom(Substring($0)), .atom(":")] + parts } ?? parts
+            })
+        case .map(let key, let value) where open == UInt8(ascii: "{"):
+            return .group(open: open, close: close, items: items.map { item in
+                guard item.count == 3 else { return item }
+                return [labeled(item[0], key), item[1], labeled(item[2], value)]
+            })
+        default:
+            return node
+        }
     }
 
     indirect enum Node {

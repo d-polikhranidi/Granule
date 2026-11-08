@@ -33,6 +33,20 @@ import Testing
             """)
     }
 
+    @Test func namedTuplesFieldsAreLabeled() {
+        let type = CHType(parsing: "Array(Tuple(id UInt32, tags Map(String, Tuple(score Float64, seen DateTime))))")
+        let text = "[(1,{'a':(0.5,'2026-11-07 12:30:00')}),(2,{})]"
+        #expect(CHValueLayout.laidOut(text, type: type, width: 80) == """
+            [
+              (id: 1, tags: {'a': (score: 0.5, seen: '2026-11-07 12:30:00')}),
+              (id: 2, tags: {})
+            ]
+            """)
+        // Unnamed fields, or a type that doesn't match the text: as it is.
+        #expect(CHValueLayout.laidOut("[(1,'a')]", type: CHType(parsing: "Array(Tuple(UInt8, String))")) == "[(1, 'a')]")
+        #expect(CHValueLayout.laidOut("[(1,'a')]", type: CHType(parsing: "Array(Tuple(x UInt8))")) == "[(1, 'a')]")
+    }
+
     @Test func otherTextIsLeftAlone() {
         #expect(CHValueLayout.laidOut("hello") == nil)
         #expect(CHValueLayout.laidOut("[1,2") == nil)

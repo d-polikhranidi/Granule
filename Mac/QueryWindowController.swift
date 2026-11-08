@@ -204,6 +204,7 @@ final class QueryWindowController: NSWindowController, NSWindowDelegate, NSToolb
         table.allowsMultipleSelection = true
         table.navigatesByCell = true
         table.autosaveName = nil
+        // (Then as the statement goes: `QueryController.updateEmptyState`.)
         table.emptyStateText = String(localized: "Run a statement (⌘↩) to see its rows here.")
         table.exportOptions = GHExportOptions()
         textOutput.isEditable = false

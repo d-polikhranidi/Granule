@@ -4,7 +4,8 @@ import Gingham
 
 /// A result as the table's rows: a column for each of the result's, cells
 /// as ClickHouse writes the values (numbers and times exactly, in their
-/// columns' time zones), `NULL` for none. The table sorts, searches and sums
+/// columns' time zones), `NULL` dimmed for none (Gingham's `emptyText`: no value, apart from
+/// an empty string). The table sorts, searches and sums
 /// the rows itself, reading them through the column source
 /// (`ResultColumnSource`: on all cores, off the main thread).
 final class ResultTableSource: GHTableViewDataSource {
@@ -16,6 +17,8 @@ final class ResultTableSource: GHTableViewDataSource {
 
     private let context: CHTextContext
     private var writer = CHTextWriter()
+    /// A column of statuses (Health's): Error and Warning as red and orange tags, the rest gray.
+    var statusColumn: Int?
     /// The text shown of a value at most (the rest is in the cell's inspector).
     nonisolated static let shownLength = 2_000
 
@@ -39,7 +42,7 @@ final class ResultTableSource: GHTableViewDataSource {
             return .column(GHTableColumn(String(index), title: name, width: Self.width(of: type, name: name), minWidth: 32, maxWidth: 4_000,
                                          alignment: trailing ? .trailing : .leading, headerAlignment: trailing ? .trailing : .leading,
                                          summary: sums ? .aggregate(.sum) : .none, toolTip: "\(name): \(result.typeNames[index])",
-                                         isFilterable: false))
+                                         isFilterable: false).showingEmptyCells(as: "NULL"))
         }
     }
 
@@ -71,8 +74,17 @@ final class ResultTableSource: GHTableViewDataSource {
         guard let index = index(of: column), row < result.rowCount else { return .empty }
         let (block, inBlock) = result.locate(row)
         let values = result.blocks[block].columns[index]
-        if values.isNull(inBlock) { return .text("NULL") }
-        return .text(values.withText(inBlock, context: context, writer: &writer) { Self.shownText($0) })
+        if values.isNull(inBlock) { return .empty }
+        let text = values.withText(inBlock, context: context, writer: &writer) { Self.shownText($0) }
+        if index == statusColumn {
+            let color: GHNamedColor = switch text {
+            case "Error": .red
+            case "Warning": .orange
+            default: .gray
+            }
+            return .tags([GHTag(text, color: color)])
+        }
+        return .text(text)
     }
 
     /// NULL sorts as no value (first), not as the text "NULL".

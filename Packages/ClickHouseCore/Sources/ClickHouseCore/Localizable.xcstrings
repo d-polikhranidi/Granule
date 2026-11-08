@@ -1,0 +1,222 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ has a column %@ already." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ has a column %2$@ already."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В %@ уже есть столбец %@."
+          }
+        }
+      }
+    },
+    "%@ is an %@ column: it can't be updated." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is an %2$@ column: it can't be updated."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ — столбец %@: его нельзя обновить."
+          }
+        }
+      }
+    },
+    "%@ is an %@ column: its values are computed, not inserted." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "%1$@ is an %2$@ column: its values are computed, not inserted."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ — столбец %@: его значения вычисляются, а не вставляются."
+          }
+        }
+      }
+    },
+    "%@ is in the table's key: it can't be updated." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ входит в ключ таблицы: его нельзя обновить."
+          }
+        }
+      }
+    },
+    "A parameter is {name:Type}: this one has no type." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Параметр пишется как {name:Type}: у этого нет типа."
+          }
+        }
+      }
+    },
+    "Syntax error at %@." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Синтаксическая ошибка у %@."
+          }
+        }
+      }
+    },
+    "Syntax error." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Синтаксическая ошибка."
+          }
+        }
+      }
+    },
+    "The SELECT gives %lld columns: the insert takes %lld." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "The SELECT gives %1$lld columns: the insert takes %2$lld."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Столбцов в SELECT: %lld, а вставка ждёт: %lld."
+          }
+        }
+      }
+    },
+    "There's no column %@ in %@." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "There's no column %1$@ in %2$@."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В %2$@ нет столбца %1$@."
+          }
+        }
+      }
+    },
+    "There's no table %@ in this database." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "В этой базе данных нет таблицы %@."
+          }
+        }
+      }
+    },
+    "This bracket closes none." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Эта скобка ничего не закрывает."
+          }
+        }
+      }
+    },
+    "This bracket isn't closed: no )." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скобка не закрыта: нет )."
+          }
+        }
+      }
+    },
+    "This bracket isn't closed: no ]." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Скобка не закрыта: нет ]."
+          }
+        }
+      }
+    },
+    "This comment isn't closed (*/)." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Комментарий не закрыт (*/)."
+          }
+        }
+      }
+    },
+    "This name has no closing quote." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У имени нет закрывающей кавычки."
+          }
+        }
+      }
+    },
+    "This parameter has no closing brace." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У параметра нет закрывающей фигурной скобки."
+          }
+        }
+      }
+    },
+    "This row has %lld values: the insert takes %lld." : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "This row has %1$lld values: the insert takes %2$lld."
+          }
+        },
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Значений в строке: %lld, а вставка ждёт: %lld."
+          }
+        }
+      }
+    },
+    "This string has no closing quote." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У строки нет закрывающей кавычки."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

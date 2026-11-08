@@ -20,6 +20,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let number = settings?.window?.windowNumber { FileHandle.standardError.write(Data("VIEWER-WINDOW \(number)\n".utf8)) }
             return
         }
+        // `-ViewerAcknowledgments YES`: Help > Acknowledgments at launch, its number printed.
+        if UserDefaults.standard.bool(forKey: "ViewerAcknowledgments") {
+            showAcknowledgments(nil)
+            if let number = acknowledgments?.window?.windowNumber { FileHandle.standardError.write(Data("VIEWER-WINDOW \(number)\n".utf8)) }
+            return
+        }
         // `-ViewerAppearance dark|light`: the app in that appearance (screenshots of both).
         if let name = UserDefaults.standard.string(forKey: "ViewerAppearance") {
             NSApp.appearance = NSAppearance(named: name == "dark" ? .darkAqua : .aqua)
@@ -80,12 +86,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private var settings: SettingsWindowController?
+    private var acknowledgments: NSWindowController?
 
     /// Settings (⌘,): the editor's and the result's appearance.
     @objc func showSettings(_ sender: Any?) {
         if settings == nil { settings = SettingsWindowController() }
         settings?.showWindow(sender)
         settings?.window?.makeKeyAndOrderFront(sender)
+    }
+
+    /// Help > Acknowledgments: the software the app is built with and its licenses, in a window.
+    @objc func showAcknowledgments(_ sender: Any?) {
+        if acknowledgments == nil {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 560),
+                                  styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+                                  backing: .buffered, defer: true)
+            window.title = String(localized: "Acknowledgments")
+            window.contentViewController = NSHostingController(rootView: AcknowledgmentsView())
+            window.toolbar = NSToolbar(identifier: "Acknowledgments")
+            window.toolbarStyle = .unified
+            window.isReleasedWhenClosed = false
+            window.setContentSize(NSSize(width: 820, height: 560))
+            window.minSize = NSSize(width: 560, height: 360)
+            window.setFrameAutosaveName("Acknowledgments")
+            if !window.setFrameUsingName("Acknowledgments") { window.center() }
+            acknowledgments = NSWindowController(window: window)
+        }
+        acknowledgments?.showWindow(sender)
     }
 
     /// File > Import from clickhouse-client…: in the connections window.
@@ -240,6 +267,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item(String(localized: "Zoom"), #selector(NSWindow.performZoom(_:))),
             .separator(),
             item(String(localized: "Bring All to Front"), #selector(NSApplication.arrangeInFront(_:))),
+        ])
+        NSApp.helpMenu = submenu(String(localized: "Help"), [
+            item(String(localized: "Acknowledgments"), #selector(showAcknowledgments(_:))),
         ])
         return menu
     }

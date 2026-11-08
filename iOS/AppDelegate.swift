@@ -62,16 +62,14 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         Self.presentSettings(from: top)
     }
 
-    /// Settings in a sheet: what's asked before a query runs, the editor's theme and size, the result's look.
+    /// Settings in a sheet: what's asked before a query runs, the editor's theme and size, the result's look,
+    /// the acknowledgments.
     static func presentSettings(from controller: UIViewController) {
-        let settings = UIHostingController(rootView: AppearanceSettingsView(includesQueries: true))
-        settings.title = String(localized: "Settings")
-        settings.navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak settings] _ in
-            settings?.dismiss(animated: true)
-        })
-        let navigation = UINavigationController(rootViewController: settings)
-        navigation.modalPresentationStyle = .formSheet
-        controller.present(navigation, animated: true)
+        weak var presented: UIViewController?
+        let settings = UIHostingController(rootView: SettingsSheet { presented?.dismiss(animated: true) })
+        presented = settings
+        settings.modalPresentationStyle = .formSheet
+        controller.present(settings, animated: true)
     }
 
     func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,

@@ -23,15 +23,15 @@ public enum CHSSHKey {
         public var description: String {
             switch self {
             case .unsupportedType(let type):
-                String(localized: "\(type) keys aren't supported: use an ed25519 or ECDSA key (ssh-keygen -t ed25519).")
+                String(localized: "\(type) keys aren't supported: use an ed25519 or ECDSA key (ssh-keygen -t ed25519).", bundle: .module)
             case .needsPassphrase:
-                String(localized: "This key has a passphrase.")
+                String(localized: "This key has a passphrase.", bundle: .module)
             case .wrongPassphrase:
-                String(localized: "That isn't this key's passphrase.")
+                String(localized: "That isn't this key's passphrase.", bundle: .module)
             case .unsupportedEncryption(let kind):
-                String(localized: "Keys encrypted as \(kind) can't be read: ssh-keygen -p -f <key> writes the key again in OpenSSH's own format.")
+                String(localized: "Keys encrypted as \(kind) can't be read: ssh-keygen -p -f <key> writes the key again in OpenSSH's own format.", bundle: .module)
             case .unreadable:
-                String(localized: "The key can't be read: it should be an OpenSSH private key.")
+                String(localized: "The key can't be read: it should be an OpenSSH private key.", bundle: .module)
             }
         }
     }

@@ -40,12 +40,12 @@ public final class CHSSHTunnel: @unchecked Sendable {
 
         public var description: String {
             switch self {
-            case .authenticationFailed: String(localized: "The SSH server didn't accept the user, password or key.")
+            case .authenticationFailed: String(localized: "The SSH server didn't accept the user, password or key.", bundle: .module)
             case .hostKeyChanged(_, let presented):
-                String(localized: "The SSH server's key has changed (now \(presented.prefix(40))…): it may be another server. Check it, then forget the old key in the connection's settings.")
-            case .unreachable(let address): String(localized: "The SSH server \(address) can't be reached.")
-            case .failed(let reason): String(localized: "The SSH connection failed: \(reason)")
-            case .closed: String(localized: "The SSH connection closed.")
+                String(localized: "The SSH server's key has changed (now \(presented.prefix(40))…): it may be another server. Check it, then forget the old key in the connection's settings.", bundle: .module)
+            case .unreachable(let address): String(localized: "The SSH server \(address) can't be reached.", bundle: .module)
+            case .failed(let reason): String(localized: "The SSH connection failed: \(reason)", bundle: .module)
+            case .closed: String(localized: "The SSH connection closed.", bundle: .module)
             }
         }
     }

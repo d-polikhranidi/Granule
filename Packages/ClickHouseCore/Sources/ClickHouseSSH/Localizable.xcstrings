@@ -1,0 +1,106 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "%@ keys aren't supported: use an ed25519 or ECDSA key (ssh-keygen -t ed25519)." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ключи %@ не поддерживаются: используйте ключ ed25519 или ECDSA (ssh-keygen -t ed25519)."
+          }
+        }
+      }
+    },
+    "Keys encrypted as %@ can't be read: ssh-keygen -p -f <key> writes the key again in OpenSSH's own format." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ключи, зашифрованные как %@, не читаются: ssh-keygen -p -f <ключ> перезапишет ключ в собственном формате OpenSSH."
+          }
+        }
+      }
+    },
+    "That isn't this key's passphrase." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Это не парольная фраза этого ключа."
+          }
+        }
+      }
+    },
+    "The SSH connection closed." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH-соединение закрылось."
+          }
+        }
+      }
+    },
+    "The SSH connection failed: %@" : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ошибка SSH-соединения: %@"
+          }
+        }
+      }
+    },
+    "The SSH server %@ can't be reached." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH-сервер %@ недоступен."
+          }
+        }
+      }
+    },
+    "The SSH server didn't accept the user, password or key." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SSH-сервер не принял пользователя, пароль или ключ."
+          }
+        }
+      }
+    },
+    "The SSH server's key has changed (now %@…): it may be another server. Check it, then forget the old key in the connection's settings." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ключ SSH-сервера изменился (теперь %@…): возможно, это другой сервер. Проверьте его, затем забудьте старый ключ в настройках подключения."
+          }
+        }
+      }
+    },
+    "The key can't be read: it should be an OpenSSH private key." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ключ не читается: это должен быть закрытый ключ OpenSSH."
+          }
+        }
+      }
+    },
+    "This key has a passphrase." : {
+      "localizations" : {
+        "ru" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "У этого ключа есть парольная фраза."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

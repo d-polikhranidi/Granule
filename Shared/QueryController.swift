@@ -447,6 +447,9 @@ final class QueryController {
                     if !shown, !isRead {
                         onText(String(localized: "Done."))
                     }
+                    // A read of no rows sends no block at all: the result before it goes all the same
+                    // (a live view that emptied kept its last rows, a query of none showed the last one's).
+                    if !shown, isRead { show(CHResult()) }
                     if let database = Self.usedDatabase(sql) { currentDatabase = database }
                     state = .finished(stats)
                     lastStats = stats

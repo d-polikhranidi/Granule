@@ -9,7 +9,9 @@ import Testing
 enum TestServer {
     static let client: CHClient? = {
         let environment = ProcessInfo.processInfo.environment
-        guard let url = environment["CH_TEST_URL"], let (endpoint, password) = CHEndpoint.parse(url) else { return nil }
+        guard let url = environment["CH_TEST_URL"], var (endpoint, password) = CHEndpoint.parse(url) else { return nil }
+        // `CH_TEST_COMPRESSION=lz4|zstd`: every result in such frames (a local server sends none by itself).
+        if let compression = environment["CH_TEST_COMPRESSION"].flatMap(CHCompression.init(rawValue:)) { endpoint.compression = compression }
         return CHClient(endpoint: endpoint, password: environment["CH_TEST_PASSWORD"] ?? password ?? "")
     }()
 
@@ -86,7 +88,8 @@ struct CHServerTests {
         let client = try await TestServer.connected()
         let columns = try await client.unreadableColumns(of: "SELECT uniqState(number) AS u, sum(number) AS s, quantilesState(0.5)(number) AS `q x` FROM numbers(10)")
         #expect(columns.map(\.name) == ["u", "q x"])
-        #expect(columns.first?.type == "AggregateFunction(uniq, UInt64)")
+        // (26.10 writes the state's version first: AggregateFunction(1, uniq, UInt64).)
+        #expect(columns.first.map { $0.type.hasPrefix("AggregateFunction(") && $0.type.contains("uniq, UInt64") } == true)
         #expect(try await client.unreadableColumns(of: "SELECT {n:UInt8} AS n", parameters: ["n": "1"]).isEmpty)
     }
 
@@ -290,7 +293,12 @@ struct CHServerTests {
     }
 
     @Test(.timeLimit(.minutes(1))) func cancellingStopsTheQueryOnTheServer() async throws {
-        let client = try await TestServer.connected()
+        // Plain blocks: frames hold a slow query's rows until they fill (about 1 MB).
+        let compressed = try await TestServer.connected()
+        var endpoint = compressed.endpoint
+        endpoint.compression = .none
+        let client = CHClient(endpoint: endpoint, password: ProcessInfo.processInfo.environment["CH_TEST_PASSWORD"] ?? "")
+        try await client.connect()
         var options = CHQueryOptions()
         let id = options.queryID
         options.settings = ["max_block_size": "1"]
@@ -310,22 +318,64 @@ struct CHServerTests {
         #expect(!running)
     }
 
-    @Test func framesAndPlainBytesGiveTheSameRows() async throws {
-        let plain = try await TestServer.connected()
-        var endpoint = plain.endpoint
-        endpoint.compression = .lz4
+    /// LZ4 and ZSTD frames (each read by its own method) give the rows plain bytes give, in
+    /// fewer bytes; ZSTD in fewer than LZ4.
+    @Test(arguments: [CHCompression.lz4, .zstd])
+    func framesAndPlainBytesGiveTheSameRows(_ compression: CHCompression) async throws {
+        let server = try await TestServer.connected()
+        var plainEndpoint = server.endpoint
+        plainEndpoint.compression = .none
+        let plain = CHClient(endpoint: plainEndpoint, password: ProcessInfo.processInfo.environment["CH_TEST_PASSWORD"] ?? "")
+        try await plain.connect()
+        var endpoint = server.endpoint
+        endpoint.compression = compression
         let framed = CHClient(endpoint: endpoint, password: ProcessInfo.processInfo.environment["CH_TEST_PASSWORD"] ?? "")
         try await framed.connect()
-        let sql = "SELECT number, toString(number) AS s, toLowCardinality(toString(number % 7)) AS l FROM numbers(300000)"
-        let one = try await plain.result(sql), other = try await framed.result(sql)
+        let sql = """
+            SELECT number, toString(number) AS s, toLowCardinality(toString(number % 7)) AS l,
+                   [toString(number % 13), 'x'] AS a, toDateTime('2026-01-01 00:00:00', 'Europe/Berlin') + number AS t,
+                   if(number % 5 = 0, NULL, number / 3) AS n
+            FROM numbers(300000)
+            """
+        func read(_ client: CHClient) async throws -> (CHResult, CHQueryStats) {
+            var result = CHResult(), stats: CHQueryStats?
+            for try await event in client.execute(sql) {
+                switch event {
+                case .result(let current): result = current
+                case .finished(let finished): stats = finished
+                }
+            }
+            return (result, try #require(stats))
+        }
+        let (one, plainStats) = try await read(plain), (other, framedStats) = try await read(framed)
         #expect(one.rowCount == 300_000 && other.rowCount == 300_000)
+        #expect(framedStats.receivedBytes < plainStats.receivedBytes / 2, "\(compression): \(framedStats.receivedBytes) of \(plainStats.receivedBytes)")
         let context = CHTextContext(defaultTimeZone: .gmt)
         for row in stride(from: 0, to: 300_000, by: 4_999) {
             let (a, ra) = one.locate(row), (b, rb) = other.locate(row)
-            for column in 0..<3 {
+            for column in 0..<one.names.count {
                 #expect(one.blocks[a].columns[column].text(ra, context: context) == other.blocks[b].columns[column].text(rb, context: context))
             }
         }
+    }
+
+    /// From 26.9 the server compresses as asked: ZSTD in far fewer bytes than LZ4.
+    @Test func zstdIsAskedForAndRead() async throws {
+        let plain = try await TestServer.connected()
+        guard plain.serverInfo?.version.isAtLeast(26, 9) == true else { return }
+        func received(_ compression: CHCompression) async throws -> Int {
+            var endpoint = plain.endpoint
+            endpoint.compression = compression
+            let client = CHClient(endpoint: endpoint, password: ProcessInfo.processInfo.environment["CH_TEST_PASSWORD"] ?? "")
+            try await client.connect()
+            var bytes = 0
+            for try await event in client.execute("SELECT number, toString(number) AS s FROM numbers(1000000)") {
+                if case .finished(let stats) = event { bytes = stats.receivedBytes }
+            }
+            return bytes
+        }
+        let lz4 = try await received(.lz4), zstd = try await received(.zstd)
+        #expect(zstd > 0 && zstd < lz4 * 6 / 10, "ZSTD \(zstd), LZ4 \(lz4)")
     }
 
     @Test func exportWritesTheServersFormat() async throws {
@@ -554,8 +604,17 @@ struct CHPlaygroundTests {
         let client = CHClient(endpoint: endpoint, password: "")
         let info = try await client.connect(timeout: 30)
         #expect(info.readonly == 1)
-        let result = try await client.result("SELECT number, toString(number) AS s FROM numbers(100000)")
-        #expect(result.rowCount == 100_000)
+        // Compressed as the server chooses (ZSTD there), read by the frames' method.
+        var stats: CHQueryStats?, rows = 0
+        for try await event in client.execute("SELECT number, toString(number) AS s FROM numbers(100000)") {
+            switch event {
+            case .result(let result): rows = result.rowCount
+            case .finished(let finished): stats = finished
+            }
+        }
+        #expect(rows == 100_000)
+        let finished = try #require(stats)
+        #expect(finished.receivedBytes < finished.resultBytes / 2, "\(finished.receivedBytes) of \(finished.resultBytes)")
         // The schema's tables, as the sidebar reads them.
         #expect(try await client.result("SELECT database, name FROM system.tables LIMIT 10").rowCount > 0)
     }

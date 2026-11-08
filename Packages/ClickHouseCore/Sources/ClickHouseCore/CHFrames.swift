@@ -1,3 +1,4 @@
+import CHZstd
 import Compression
 import Foundation
 
@@ -63,11 +64,12 @@ final class CHByteQueue {
 
 /// Reads ClickHouse's own compressed frames (`compress=1`): each is a 16-byte
 /// checksum, a method byte, the frame's size with its 9-byte header, the
-/// size of its bytes uncompressed, then the bytes (LZ4 blocks: the
-/// Compression framework's raw LZ4).
+/// size of its bytes uncompressed, then the bytes: each frame by its own method, whatever
+/// was asked (LZ4 and LZ4HC by the Compression framework's raw LZ4, ZSTD by zstd's own
+/// decompression, `CHZstd`; none).
 struct CHFrameReader {
     enum Failure: Error, Equatable {
-        /// A method other than none and LZ4 (ZSTD: Apple has no decoder).
+        /// A method other than none, LZ4 and ZSTD.
         case unsupportedMethod(UInt8)
         case malformed
     }
@@ -92,6 +94,11 @@ struct CHFrameReader {
                 let target = output.reserve(size).assumingMemoryBound(to: UInt8.self)
                 let written = compression_decode_buffer(target, size, payload.bindMemory(to: UInt8.self).baseAddress!, payload.count,
                                                         nil, COMPRESSION_LZ4_RAW)
+                guard written == size else { throw Failure.malformed }
+                output.didWrite(size)
+            case 0x90:
+                let target = output.reserve(size)
+                let written = ch_zstd_decompress(target, size, payload.baseAddress!, payload.count)
                 guard written == size else { throw Failure.malformed }
                 output.didWrite(size)
             default:

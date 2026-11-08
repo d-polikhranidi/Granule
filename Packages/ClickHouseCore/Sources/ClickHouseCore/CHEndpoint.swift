@@ -53,14 +53,14 @@ public struct CHEndpoint: Codable, Sendable, Hashable, Identifiable {
     /// and wake on the first request, which takes a while).
     public var isCloud: Bool { host.hasSuffix(".clickhouse.cloud") }
 
-    /// Whether results come compressed (ClickHouse's LZ4 frames): not on
+    /// Whether results come compressed (ClickHouse's frames, LZ4 or ZSTD): not on
     /// this Mac or a local network, where compressing them costs the server
     /// more time than sending them (50M rows over loopback: 1.7 s plain, 3.5 s
     /// in LZ4), and where frames would hold rows back (the server sends a
     /// frame once it has 1 MB).
     public var compressesResults: Bool {
         switch compression {
-        case .lz4: return true
+        case .lz4, .zstd: return true
         case .none: return false
         // Through a bastion, the way is the bastion's (the server's own name is as it sees it).
         case .automatic: return !Self.isLocal(ssh?.host ?? host)
@@ -182,10 +182,15 @@ enum CHAuthentication {
 
 /// How results are compressed on their way from the server.
 public enum CHCompression: String, Codable, Sendable, Hashable, CaseIterable {
-    /// Not on this Mac or a local network, LZ4 otherwise.
+    /// Not on this Mac or a local network, ZSTD otherwise: a third of LZ4's bytes is worth
+    /// its time on any link slower than some 5 Gbit/s (LZ4 from servers before 26.9).
     case automatic
     /// ClickHouse's LZ4 frames (`compress=1`).
     case lz4
+    /// ZSTD frames: about a third of LZ4's bytes, a little slower to make and to read (5M
+    /// rows on 26.10: 26 MB in 0.43 s, LZ4 81 MB in 0.34 s, over loopback). Servers before
+    /// 26.9 send LZ4 over HTTP whatever is asked.
+    case zstd
     case none
 }
 

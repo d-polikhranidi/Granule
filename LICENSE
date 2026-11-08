@@ -34,3 +34,7 @@ by Swift Package Manager.
 Packages/ClickHouseCore/Sources/CHBcrypt is this repository's own code (MIT):
 OpenBSD's bcrypt_pbkdf written again after its description, for OpenSSH keys
 with a passphrase; Blowfish's initial tables are the hex digits of pi.
+
+Packages/ClickHouseCore/Sources/CHZstd/zstd holds zstd's decompression (zstd 1.5.7
+by Meta Platforms, Inc. and affiliates), under the BSD license in its LICENSE there,
+vendored by Tools/vendor-zstd.sh.

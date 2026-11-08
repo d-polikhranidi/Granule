@@ -13,6 +13,8 @@ let runs = arguments.dropFirst().first.flatMap(Int.init) ?? 3
 let environment = ProcessInfo.processInfo.environment
 guard var (endpoint, password) = CHEndpoint.parse(environment["CH_URL"] ?? "http://localhost:18123") else { exit(1) }
 endpoint.user = environment["CH_USER"] ?? endpoint.user
+// `CH_COMPRESSION=lz4|zstd|none`: the frames asked for (a local server sends none by itself).
+if let compression = environment["CH_COMPRESSION"].flatMap(CHCompression.init(rawValue:)) { endpoint.compression = compression }
 let client = CHClient(endpoint: endpoint, password: environment["CH_PASSWORD"] ?? password ?? "")
 let info = try await client.connect()
 print("ClickHouse \(info.version), zone \(info.timeZone)")

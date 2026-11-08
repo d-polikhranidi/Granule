@@ -954,8 +954,9 @@ struct ConnectionFormView: View {
                         Toggle("Use HTTPS", isOn: Binding(get: { form.isSecure }, set: { form.setSecure($0) }))
                         TextField("Database", text: $form.database, prompt: Text("the user's default"))
                         Picker("Compression", selection: $form.compression) {
-                            Text("Automatic (none on a local network)").tag(CHCompression.automatic)
-                            Text("LZ4").tag(CHCompression.lz4)
+                            Text("Automatic (none on a local network, ZSTD elsewhere)").tag(CHCompression.automatic)
+                            Text("LZ4 (less work for the server)").tag(CHCompression.lz4)
+                            Text("ZSTD (the fewest bytes)").tag(CHCompression.zstd)
                             Text("None").tag(CHCompression.none)
                         }
                     }

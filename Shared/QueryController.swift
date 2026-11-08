@@ -220,7 +220,10 @@ final class QueryController {
                     let thrownAway = CHSQL.kind(of: statement) == .read && CHSQL.formatClause(of: statement) == nil
                         ? statement + "\nFORMAT Null" : statement
                     do {
-                        _ = try await client.plainText(thrownAway, queryID: id, sessionID: sessionID, parameters: parameters)
+                        _ = try await client.plainText(thrownAway, database: currentDatabase, queryID: id, sessionID: sessionID,
+                                                       parameters: parameters)
+                        // The statements after a USE are in its database.
+                        if let database = Self.usedDatabase(statement) { currentDatabase = database }
                     } catch {
                         if Task.isCancelled {
                             // Closing the connection doesn't stop a statement that writes.
@@ -334,7 +337,12 @@ final class QueryController {
                 endpoint.title)
     }
 
+    /// Runs started (statements, views, refreshes): what an estimate asked before one checks
+    /// that nothing ran since.
+    private(set) var starts = 0
+
     private func start(_ sql: String, parameters: [String: String], refresh: Bool) {
+        starts += 1
         refreshesLive = false
         isRefreshing = refresh
         rewrittenColumns = []
@@ -392,7 +400,7 @@ final class QueryController {
 
     private func runForText(_ sql: String, parameters: [String: String]) async {
         do {
-            let text = try await client.plainText(sql, sessionID: sessionID, parameters: parameters)
+            let text = try await client.plainText(sql, database: currentDatabase, sessionID: sessionID, parameters: parameters)
             guard !Task.isCancelled else { return }
             onText(text)
             state = .finished(CHQueryStats(queryID: "", rows: 0, receivedBytes: text.utf8.count, resultBytes: 0, firstRows: nil,
@@ -415,6 +423,8 @@ final class QueryController {
         if view == nil { monitor(options.queryID) }
         options.sessionID = sessionID
         options.parameters = parameters
+        // The database a USE before chose (the request's own `database` would undo it).
+        options.database = currentDatabase
         // A server view and a query's details are the viewer's own: left out of the views of the log.
         options.isBackground = view != nil || isViewersOwn
         let budget = Self.budget
@@ -449,7 +459,8 @@ final class QueryController {
                     }
                     // A read of no rows sends no block at all: the result before it goes all the same
                     // (a live view that emptied kept its last rows, a query of none showed the last one's).
-                    if !shown, isRead { show(CHResult()) }
+                    // (A live view keeps its columns, sort and widths: its rows go.)
+                    if !shown, isRead { show(refresh ? source?.result.emptied() ?? CHResult() : CHResult(), keepingLayout: refresh) }
                     if let database = Self.usedDatabase(sql) { currentDatabase = database }
                     state = .finished(stats)
                     lastStats = stats

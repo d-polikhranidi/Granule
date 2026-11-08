@@ -134,7 +134,7 @@ extension CHClient {
             analysis["default_format"] = nil
             return try await checkWrite(statement, database: database, settings: analysis)
         }
-        guard let error = try await namesError(of: statement, settings: settings) else { return [] }
+        guard let error = try await namesError(of: statement, settings: settings, database: database) else { return [] }
         // (The place in the request: after the EXPLAIN's words, which the error doesn't say: the name is looked for.)
         return Self.problems(from: error, in: statement, prefix: nil).map { [$0] } ?? []
     }
@@ -142,7 +142,7 @@ extension CHClient {
     /// The analyzer's error on a query's names and types, without running it
     /// (`EXPLAIN QUERY TREE`; `EXPLAIN PLAN` before 24.3 or with the analyzer
     /// off); `nil` for none, or when the limits stopped it.
-    func namesError(of query: String, settings: [String: String]) async throws -> CHServerError? {
+    func namesError(of query: String, settings: [String: String], database: String? = nil) async throws -> CHServerError? {
         let modern = serverInfo?.version.isAtLeast(24, 3) ?? true
         var forms = modern ? ["EXPLAIN QUERY TREE ", "EXPLAIN PLAN "] : ["EXPLAIN PLAN "]
         var settings = settings
@@ -150,7 +150,7 @@ extension CHClient {
         while let form = forms.first {
             forms.removeFirst()
             do {
-                _ = try await plainText(form + query, settings: settings, background: true)
+                _ = try await plainText(form + query, settings: settings, database: database, background: true)
                 return nil
             } catch let error as CHServerError {
                 // Not the statement's: the limits stopped it, the user may not read a table (ACCESS_DENIED:

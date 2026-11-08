@@ -98,11 +98,13 @@ public enum CHClientConfig {
         var credentialsIndent: Int?
         var itemIndent: Int?
         func unquoted(_ value: Substring) -> String {
-            var value = value.trimmingCharacters(in: .whitespaces)
-            if let comment = value.range(of: " #") { value = value[..<comment.lowerBound].trimmingCharacters(in: .whitespaces) }
-            if value.count >= 2, let first = value.first, first == value.last, first == "'" || first == "\"" {
-                value = String(value.dropFirst().dropLast())
+            let value = value.trimmingCharacters(in: .whitespaces)
+            // A quoted value ends at its closing quote: a " #" inside is the value's ('abc #123').
+            if let quote = value.first, quote == "'" || quote == "\"",
+               let close = value.dropFirst().firstIndex(of: quote) {
+                return String(value[value.index(after: value.startIndex)..<close])
             }
+            if let comment = value.range(of: " #") { return value[..<comment.lowerBound].trimmingCharacters(in: .whitespaces) }
             return value
         }
         for raw in text.split(separator: "\n", omittingEmptySubsequences: true) {

@@ -30,7 +30,8 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     private var statusTimer: Timer?
     private var editorHeight: NSLayoutConstraint!
     private var parameterValues: [String: String] = [:]
-    private var historySaved = Set<String>()
+    /// The runs (`QueryController.starts`) already in the history.
+    private var historySaved = Set<Int>()
     private var completions: Completions?
     private let completionBar = CompletionBar()
     private lazy var checker = StatementChecker(client: client, isAutomatic: !endpoint.isCloud)
@@ -71,7 +72,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         let run = UIBarButtonItem(title: String(localized: "Run"), image: UIImage(systemName: "play.fill"),
                                   primaryAction: UIAction { [weak self] _ in self?.runStatement() })
         let stop = UIBarButtonItem(title: String(localized: "Stop"), image: UIImage(systemName: "stop.fill"),
-                                   primaryAction: UIAction { [weak self] _ in self?.queries.cancel() })
+                                   primaryAction: UIAction { [weak self] _ in self?.stop() })
         // The main action, on its own; Run and Stop are the last to go to the overflow menu.
         if #available(iOS 26.0, *) { run.style = .prominent }
         if #available(iOS 27.0, *) {
@@ -347,7 +348,17 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     // The menu bar's commands (`AppDelegate.buildMenu`): they reach this screen through the responder chain.
     @objc func runCommand(_ sender: Any?) { runStatement() }
     @objc func runAllCommand(_ sender: Any?) { runAllStatements() }
-    @objc func stopCommand(_ sender: Any?) { queries.cancel() }
+    @objc func stopCommand(_ sender: Any?) { stop() }
+
+    /// Stop: the estimate before a run, or the run.
+    private func stop() {
+        if estimate != nil {
+            estimate?.cancel()
+            estimate = nil
+            updateStatus()
+        }
+        queries.cancel()
+    }
     @objc func checkCommand(_ sender: Any?) { checker.checkNow(text: editor.text, cursor: editor.selectedRange.location) }
     @objc func formatCommand(_ sender: Any?) { formatStatement() }
     @objc func detailsCommand(_ sender: Any?) { showQueryDetails() }
@@ -373,7 +384,7 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
     override func validate(_ command: UICommand) {
         super.validate(command)
         if command.action == #selector(stopCommand(_:)) {
-            command.attributes = queries.isRunning ? [] : [.disabled]
+            command.attributes = queries.isRunning || estimate != nil ? [] : [.disabled]
         }
     }
 
@@ -540,18 +551,22 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
         }
     }
 
-    private var isEstimating = false
+    /// The estimate before a run, if one is asked for: a new run or Stop cancels it.
+    private var estimate: Task<Void, Never>?
 
     /// Before a query the server estimates to read more rows than Settings allows: asked first.
     private func confirmLargeRead(_ sql: String, values: [String: String], then run: @escaping () -> Void) {
-        guard LargeReads.asks, !isEstimating else { return run() }
-        isEstimating = true
+        estimate?.cancel()
+        guard LargeReads.asks else { return run() }
+        let starts = queries.starts
         statusLabel.textColor = .secondaryLabel
         statusLabel.text = String(localized: "Estimating the rows it reads…")
-        Task { [weak self] in
+        estimate = Task { [weak self] in
             guard let self else { return }
             let question = await queries.largeReadQuestion(for: sql, parameters: values)
-            isEstimating = false
+            // Another run asked meanwhile, Stop, or something else ran (a view): this one doesn't.
+            guard !Task.isCancelled, queries.starts == starts else { return }
+            estimate = nil
             guard let question else { return run() }
             let alert = UIAlertController(title: question.title, message: question.detail, preferredStyle: .alert)
             let runAction = UIAlertAction(title: String(localized: "Run"), style: .default) { _ in run() }
@@ -773,9 +788,11 @@ final class QueryViewController: UIViewController, UITextViewDelegate, UISearchR
             if case .finished(let stats) = queries.state, let preview, queries.statement == preview, stats.rows >= Schema.previewRows {
                 statusLabel.text = String(localized: "The first \(Schema.previewRows.formatted()) rows. Show All Rows in the table's menu reads them all.")
             }
-            if case .finished(let stats) = queries.state, let sql = queries.statement, queries.isUsersStatement, !historySaved.contains(stats.queryID) {
-                historySaved.insert(stats.queryID)
-                lastRun = history.add(sql, rows: stats.rows, seconds: QueryController.seconds(stats.elapsed), queryID: stats.queryID)
+            if case .finished(let stats) = queries.state, let sql = queries.statement, queries.isUsersStatement, !historySaved.contains(queries.starts) {
+                // Once a run (a statement with its own FORMAT has no id the log knows: no Query Details for it).
+                historySaved.insert(queries.starts)
+                lastRun = history.add(sql, rows: stats.rows, seconds: QueryController.seconds(stats.elapsed),
+                                      queryID: stats.queryID.isEmpty ? nil : stats.queryID)
             }
         }
     }
@@ -1159,7 +1176,8 @@ final class CellInspectorController: UIViewController {
         let columns = max(16, Int(width / max(1, character)))
         guard columns != laidOutColumns else { return }
         laidOutColumns = columns
-        textView.text = Self.prettyJSON(text) ?? (CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, type: type, width: columns) : nil) ?? text
+        // Arrays, tuples and maps by their type first: a JSON reading of [0.1] writes its digits again.
+        textView.text = (CHValueLayout.laysOut(type) ? CHValueLayout.laidOut(text, type: type, width: columns) : Self.prettyJSON(text)) ?? text
     }
 
     static func prettyJSON(_ text: String) -> String? {

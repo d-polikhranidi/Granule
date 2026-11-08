@@ -20,6 +20,15 @@ public struct CHResult: Sendable {
     /// Whether the header has come (the columns are known).
     public var hasHeader: Bool { !names.isEmpty || !blocks.isEmpty }
 
+    /// Its columns without its rows: a view read again that came back with none.
+    public func emptied() -> CHResult {
+        var empty = CHResult()
+        empty.names = names
+        empty.typeNames = typeNames
+        empty.types = types
+        return empty
+    }
+
     mutating func append(_ block: CHBlock) throws {
         if names.isEmpty && types.isEmpty {
             names = block.names

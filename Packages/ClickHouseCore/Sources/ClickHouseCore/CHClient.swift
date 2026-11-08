@@ -17,6 +17,9 @@ public struct CHQueryOptions: Sendable {
     /// The viewer's own query, not the user's: marked in `system.query_log`
     /// (`CHClient.backgroundComment`) so views of the log can leave it out.
     public var isBackground = false
+    /// The database names without one are in (`nil`: the connection's). A session's `USE`
+    /// needs it said again: each request's `database` is the one its query runs in.
+    public var database: String?
 
     public init() {}
 }
@@ -263,7 +266,7 @@ public final class CHClient: Sendable {
             var request: URLRequest
             do {
                 let settings = resultSettings(for: sql, options: options)
-                request = try self.request(sql, settings: settings, database: nil, queryID: options.queryID,
+                request = try self.request(sql, settings: settings, database: options.database, queryID: options.queryID,
                                            sessionID: options.sessionID, parameters: options.parameters, background: options.isBackground)
             } catch {
                 continuation.finish(throwing: error)

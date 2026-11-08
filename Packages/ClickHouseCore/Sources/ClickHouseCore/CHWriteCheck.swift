@@ -274,7 +274,7 @@ extension CHClient {
             let selected = values.isEmpty ? "1" : values.map { text.substring(with: $0) }.joined(separator: ", ")
             let condition = condition.map { "\nWHERE " + text.substring(with: $0) } ?? ""
             let select = "SELECT \(selected)\nFROM \(tableSQL)\(condition)"
-            if let error = try await namesError(of: select, settings: settings) {
+            if let error = try await namesError(of: select, settings: settings, database: database) {
                 guard var problem = Self.problems(from: error, in: statement, prefix: nil) else { return }
                 // The table's nearest columns, if the server named none.
                 if problem.suggestions.isEmpty, let range = problem.range {

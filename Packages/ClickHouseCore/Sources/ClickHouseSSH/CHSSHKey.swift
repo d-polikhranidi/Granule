@@ -70,7 +70,11 @@ public enum CHSSHKey {
         let salt = try kdfReader.bytes(), rounds = try kdfReader.uint32()
         guard !passphrase.isEmpty else { throw Failure.wrongPassphrase }
         var derived = [UInt8](repeating: 0, count: keyLength + ivLength)
-        let passBytes = Array(passphrase.utf8)
+        var passBytes = Array(passphrase.utf8)
+        // The passphrase's bytes and what they made go once the key is read (memset_s, which the
+        // compiler keeps; the passphrase's String itself can't be wiped).
+        func wipe(_ bytes: inout [UInt8]) { bytes.withUnsafeMutableBytes { _ = memset_s($0.baseAddress, $0.count, 0, $0.count) } }
+        defer { wipe(&passBytes) }
         let status = passBytes.withUnsafeBufferPointer { pass in
             salt.withUnsafeBufferPointer { salt in
                 ch_bcrypt_pbkdf(UnsafeRawPointer(pass.baseAddress!).assumingMemoryBound(to: CChar.self), pass.count,
@@ -78,8 +82,12 @@ public enum CHSSHKey {
             }
         }
         guard status == 0 else { throw Failure.unreadable }
-        defer { derived.withUnsafeMutableBytes { _ = memset($0.baseAddress!, 0, $0.count) } }
-        let key = Array(derived.prefix(keyLength)), iv = Array(derived.suffix(ivLength))
+        defer { wipe(&derived) }
+        var key = Array(derived.prefix(keyLength)), iv = Array(derived.suffix(ivLength))
+        defer {
+            wipe(&key)
+            wipe(&iv)
+        }
         var section: [UInt8]
         if cipher.hasSuffix("gcm@openssh.com") {
             // The tag follows the sealed section.

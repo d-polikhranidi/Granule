@@ -18,7 +18,8 @@ final class ConnectionFormViewController: UIViewController, UITextFieldDelegate,
     private let passwordField = UITextField()
     private let databaseField = UITextField()
     private let readOnlySwitch = UISwitch()
-    private let compressionControl = UISegmentedControl(items: [String(localized: "Automatic"), "LZ4", String(localized: "None")])
+    // (In `CHCompression.allCases`' order.)
+    private let compressionControl = UISegmentedControl(items: [String(localized: "Automatic"), "LZ4", "ZSTD", String(localized: "None")])
     private let fingerprintField = UITextField()
     private let statusLabel = UILabel()
     /// The whole of a long message (the status shows its first paragraph).

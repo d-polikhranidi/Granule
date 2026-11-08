@@ -210,11 +210,11 @@ public final class CHClient: Sendable {
     /// Whether JSON columns come as their text (24.10+, when settings may be set).
     var readsJSONAsText: Bool { maySetSettings && (state.value?.version.isAtLeast(24, 10) ?? false) }
 
-    /// Whether results come in ClickHouse's own compressed frames: off the local network, and
-    /// in LZ4 only (Apple has no zstd). A user with readonly = 1 can't name the method, and the
-    /// server's may be ZSTD (its default from 26.9, or the user's profile: ClickHouse's public
-    /// playground sends ZSTD, unreadable here): such a user gets plain blocks.
-    var compressesResults: Bool { endpoint.compressesResults && maySetSettings }
+    /// Whether results come in ClickHouse's own compressed frames: off the local network. Each
+    /// frame is read by its own method (LZ4 or ZSTD), so a user with readonly = 1, who can't
+    /// name one, gets the server's (ZSTD by default from 26.9, or the profile's: the public
+    /// playground's is).
+    var compressesResults: Bool { endpoint.compressesResults }
 
     /// The parameters and settings every result query gets: Native blocks
     /// (in LZ4 frames off the local network), the layouts the decoder reads,
@@ -231,7 +231,8 @@ public final class CHClient: Sendable {
         guard maySetSettings else { return settings }
         let info = state.value
         settings["enable_http_compression"] = "0"
-        if compressesResults { settings["network_compression_method"] = "LZ4" }
+        // ZSTD unless LZ4 was chosen (servers before 26.9 send LZ4 over HTTP whatever is asked).
+        if compressesResults { settings["network_compression_method"] = endpoint.compression == .lz4 ? "LZ4" : "ZSTD" }
         if readsJSONAsText { settings["output_format_native_write_json_as_string"] = "1" }
         if let version = info?.version, version.isAtLeast(25, 6) {
             settings["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1"

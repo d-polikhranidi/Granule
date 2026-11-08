@@ -36,9 +36,17 @@ let package = Package(
             name: "CHBcrypt",
             cSettings: [.unsafeFlags(["-O3"])]
         ),
+        // zstd's decompression (Tools/vendor-zstd.sh: zstd 1.5.7, BSD license): Apple's
+        // Compression framework has no zstd, and ClickHouse servers may send it.
+        .target(
+            name: "CHZstd",
+            exclude: ["zstd/LICENSE"],
+            cSettings: [.define("ZSTD_DISABLE_ASM"), .define("ZSTD_LEGACY_SUPPORT", to: "0"), .define("DEBUGLEVEL", to: "0"),
+                        .unsafeFlags(["-O3"])]
+        ),
         .target(
             name: "ClickHouseCore",
-            dependencies: ["CHDecode"],
+            dependencies: ["CHDecode", "CHZstd"],
             swiftSettings: [.enableUpcomingFeature("ApproachableConcurrency")]
         ),
         // The loops over every value of a result in C: fast in debug builds too.

@@ -52,6 +52,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             endpoint.environment = UserDefaults.standard.string(forKey: "ViewerEnvironment").flatMap(CHEnvironment.init(rawValue:))
             DispatchQueue.main.async { connections.open(endpoint, password: password ?? "") }
         }
+        // `-ViewerConnect <name>`: that saved connection opened at launch (with `-ViewerForm demo`, the demo list's).
+        if let name = UserDefaults.standard.string(forKey: "ViewerConnect"),
+           let endpoint = Connections.shared.endpoints.first(where: { $0.title == name || $0.name == name }) {
+            DispatchQueue.main.async { connections.open(endpoint, password: Connections.shared.password(for: endpoint)) }
+        }
         #endif
     }
 

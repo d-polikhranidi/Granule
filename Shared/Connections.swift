@@ -14,9 +14,9 @@ final class Connections {
     static let shared = Connections()
 
     #if DEBUG
-    /// `-ViewerForm testfail`, `ssh` and `playground` run on a list and Keychain entries of their own (the
+    /// `-ViewerForm testfail`, `ssh`, `playground` and `demo` run on a list and Keychain entries of their own (the
     /// user's aren't touched, and nothing made by another build is read).
-    static let isChecking = ["testfail", "ssh", "playground"].contains(UserDefaults.standard.string(forKey: "ViewerForm"))
+    static let isChecking = ["testfail", "ssh", "playground", "demo"].contains(UserDefaults.standard.string(forKey: "ViewerForm"))
         || UserDefaults.standard.string(forKey: "ViewerImport") != nil
     private static let key = isChecking ? "ConnectionsForChecks" : "Connections"
     #else
@@ -38,8 +38,30 @@ final class Connections {
             endpoints = []
             UserDefaults.standard.removeObject(forKey: Self.key)
         }
+        // `-ViewerForm demo`: a list as a team might have one, for the App Store's screenshots
+        // (no passwords: nothing goes to the Keychain).
+        if UserDefaults.standard.string(forKey: "ViewerForm") == "demo" { endpoints = Self.demoEndpoints() }
         #endif
     }
+
+    #if DEBUG
+    private static func demoEndpoints() -> [CHEndpoint] {
+        var analytics = CHEndpoint(name: "Analytics", host: "ch-prod.example.com", port: 8443, isSecure: true, user: "analyst",
+                                   database: "analytics", isReadOnly: true)
+        analytics.environment = .production
+        var staging = CHEndpoint(name: "Events staging", host: "ch-staging.example.com", port: 8443, isSecure: true, user: "default",
+                                 database: "events")
+        staging.environment = .staging
+        var cluster = CHEndpoint(name: "Logs cluster", host: "10.0.4.12", port: 8123, user: "default", database: "logs")
+        cluster.environment = .testing
+        cluster.ssh = CHSSHBastion(host: "bastion.example.com", user: "deploy", keyName: "id_ed25519")
+        var local = CHEndpoint(name: "Local server", host: "localhost", port: 8123)
+        local.environment = .local
+        let playground = CHEndpoint(name: String(localized: "ClickHouse Playground"), host: "play.clickhouse.com", port: 443,
+                                    isSecure: true, user: "explorer", isReadOnly: true)
+        return [analytics, staging, cluster, local, playground]
+    }
+    #endif
 
     private func save() {
         if let data = try? JSONEncoder().encode(endpoints) { UserDefaults.standard.set(data, forKey: Self.key) }

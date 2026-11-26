@@ -15,9 +15,9 @@ let package = Package(
     ],
     dependencies: [
         // SSH tunnels (Apple's SSH on SwiftNIO; the core itself needs nothing).
-        .package(url: "https://github.com/apple/swift-nio-ssh.git", from: "0.12.0"),
-        .package(url: "https://github.com/apple/swift-nio.git", from: "2.70.0"),
-        .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssh.git", from: "0.15.2"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.105.2"),
+        .package(url: "https://github.com/apple/swift-crypto.git", "4.0.0"..<"6.0.0"),
     ],
     targets: [
         // A server reached through an SSH bastion: a local port forwarded to it.

@@ -4,6 +4,11 @@ A native ClickHouse client for the Mac, iPad and iPhone, made for results of
 any size. Rows appear as they arrive, and tens of millions of them sort,
 search and scroll at once.
 
+## Get it
+
+- [On the App Store](https://apps.apple.com/app/id6832011031), free, for the Mac, iPad and iPhone.
+- The Mac app as a download: the notarized `.dmg` of each version is on [Releases](https://github.com/d-polikhranidi/Granule/releases).
+
 ## What it does
 
 **Results**
